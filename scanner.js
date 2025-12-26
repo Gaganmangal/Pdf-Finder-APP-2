@@ -53,7 +53,7 @@ async function scanDirectory(dir, drive = "D") {
         };
 
         // Console log to show metadata being read from file system
-        console.log("\n📄 File Metadata from D Drive:", {
+        console.log(`\n📄 File Metadata from ${drive}:`, {
           fileName: fileMetadata.fileName,
           fullPath: fileMetadata.fullPath,
           sizeMB: fileMetadata.sizeMB,
