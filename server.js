@@ -13,7 +13,7 @@ app.post("/scan-d-drive", async (req, res) => {
     const FileMeta = require("./models/FileMeta");
     const countBefore = await FileMeta.countDocuments();
 
-    await scanDrive("D:/", "D"); // Laptop test
+    await scanDrive("D:/", "D"); // EC2 instance
 
     const countAfter = await FileMeta.countDocuments();
     const newDocs = countAfter - countBefore;
@@ -97,9 +97,11 @@ app.post("/scan-network-share", async (req, res) => {
 app.post("/scan", async (req, res) => {
   try {
     const { path: scanPath, drive = "CUSTOM" } = req.body;
-    
+
     if (!scanPath) {
-      return res.status(400).json({ error: "Path is required in request body" });
+      return res
+        .status(400)
+        .json({ error: "Path is required in request body" });
     }
 
     console.log(`\n🚀 Starting scan of: ${scanPath}`);
@@ -130,11 +132,87 @@ app.post("/scan", async (req, res) => {
   }
 });
 
+// Route to list files in a folder (without scanning)
+app.get("/list-folder", async (req, res) => {
+  try {
+    const { path: folderPath } = req.query;
+    const fs = require("fs");
+    const path = require("path");
+
+    if (!folderPath) {
+      return res
+        .status(400)
+        .json({ error: "Path query parameter is required" });
+    }
+
+    console.log(`\n📋 Listing contents of: ${folderPath}`);
+
+    if (!fs.existsSync(folderPath)) {
+      return res.status(404).json({ error: `Path not found: ${folderPath}` });
+    }
+
+    const stats = fs.statSync(folderPath);
+    if (!stats.isDirectory()) {
+      return res
+        .status(400)
+        .json({ error: `Path is not a directory: ${folderPath}` });
+    }
+
+    const items = fs.readdirSync(folderPath);
+    const result = {
+      path: folderPath,
+      totalItems: items.length,
+      items: [],
+    };
+
+    for (const item of items) {
+      const fullPath = path.join(folderPath, item);
+      try {
+        const stat = fs.statSync(fullPath);
+        result.items.push({
+          name: item,
+          type: stat.isDirectory() ? "directory" : "file",
+          size: stat.isFile() ? stat.size : null,
+          sizeMB: stat.isFile()
+            ? +(stat.size / (1024 * 1024)).toFixed(2)
+            : null,
+          modifiedAt: stat.mtime,
+          createdAt: stat.birthtime || stat.ctime,
+          accessedAt: stat.atime,
+        });
+      } catch (err) {
+        result.items.push({
+          name: item,
+          type: "unknown",
+          error: err.message,
+        });
+      }
+    }
+
+    console.log(`✅ Found ${result.items.length} items in ${folderPath}`);
+    res.json(result);
+  } catch (err) {
+    console.error("❌ List folder error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // 🔥 THIS ROUTE WAS MISSING (404 fix)
 app.get("/files", async (req, res) => {
   const FileMeta = require("./models/FileMeta");
-  const files = await FileMeta.find().limit(50);
-  res.json(files);
+  const { limit = 50, drive, folderPath } = req.query;
+
+  let query = {};
+  if (drive) query.drive = drive;
+  if (folderPath) query.folderPath = { $regex: folderPath, $options: "i" };
+
+  const files = await FileMeta.find(query)
+    .limit(parseInt(limit))
+    .sort({ scannedAt: -1 });
+  res.json({
+    total: files.length,
+    files: files,
+  });
 });
 
 app.listen(3001, () => {

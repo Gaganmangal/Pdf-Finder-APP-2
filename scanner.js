@@ -5,10 +5,15 @@ const FileMeta = require("./models/FileMeta");
 async function scanDirectory(dir, drive = "D") {
   let items;
   let fileCount = 0;
+  let dirCount = 0;
 
   try {
     items = fs.readdirSync(dir);
-  } catch {
+    console.log(
+      `\n📁 Scanning directory: ${dir} (${items.length} items found)`
+    );
+  } catch (err) {
+    console.error(`❌ Cannot read directory ${dir}:`, err.message);
     return;
   }
 
@@ -23,6 +28,8 @@ async function scanDirectory(dir, drive = "D") {
     }
 
     if (stat.isDirectory()) {
+      dirCount++;
+      // Recursively scan subdirectories
       await scanDirectory(fullPath, drive);
     } else if (stat.isFile()) {
       try {
@@ -83,9 +90,13 @@ async function scanDirectory(dir, drive = "D") {
     }
   }
 
-  if (fileCount > 0) {
-    console.log(`\n📊 Total files saved from ${dir}: ${fileCount}`);
+  if (fileCount > 0 || dirCount > 0) {
+    console.log(`\n📊 Summary for ${dir}:`);
+    console.log(`   Files found: ${fileCount}`);
+    console.log(`   Directories scanned: ${dirCount}`);
   }
+
+  return { fileCount, dirCount };
 }
 
 module.exports = scanDirectory;
