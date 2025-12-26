@@ -1,126 +1,83 @@
 const express = require("express");
+const fs = require("fs");
+const path = require("path");
+
 const connectDB = require("./db");
 const scanDrive = require("./scanner");
+const FileMeta = require("./models/FileMeta");
 
 const app = express();
 app.use(express.json());
 
+// --------------------
+// DB CONNECT
+// --------------------
 connectDB();
 
-app.post("/scan-d-drive", async (req, res) => {
+// =======================================================
+// 1️⃣ SCAN NETWORK SHARE (MAIN ROUTE – EC2 LINUX)
+// =======================================================
+app.post("/scan-network-share", async (req, res) => {
   try {
-    const fs = require("fs");
-    const scanPath = "D:/";
+    const scanPath = "/mnt/pdfs";
 
-    console.log("\n🚀 Starting D drive scan...");
+    console.log("\n🚀 Starting network share scan...");
+    console.log(`📁 Scan path: ${scanPath}`);
 
-    // Check if path exists (Windows only - won't work on EC2/Linux)
     if (!fs.existsSync(scanPath)) {
-      const errorMsg = `Path "${scanPath}" does not exist. This route is for Windows D drive only. On EC2/Linux, use /scan-network-share instead.`;
-      console.error(`❌ ${errorMsg}`);
       return res.status(404).json({
-        error: errorMsg,
-        suggestion:
-          "Use POST /scan-network-share for EC2/Linux network share scanning",
+        error: `Mount path not found: ${scanPath}`,
+        hint: "Check CIFS mount on Linux EC2",
       });
     }
 
-    const FileMeta = require("./models/FileMeta");
     const countBefore = await FileMeta.countDocuments();
 
-    await scanDrive(scanPath, "D");
+    await scanDrive(scanPath, "NETWORK");
 
     const countAfter = await FileMeta.countDocuments();
     const newDocs = countAfter - countBefore;
 
-    console.log("\n✅ D drive scan completed!");
-    console.log(
-      `📊 Documents before: ${countBefore}, after: ${countAfter}, new: ${newDocs}`
-    );
-
-    // Get a sample document to show metadata in response
     const sampleDoc = await FileMeta.findOne().sort({ scannedAt: -1 });
 
+    console.log("✅ Network share scan completed");
+
     res.json({
-      message: "D drive scanned & data saved",
+      message: "Network share scanned successfully",
       stats: {
         documentsBefore: countBefore,
         documentsAfter: countAfter,
         newDocuments: newDocs,
       },
-      sampleMetadata: sampleDoc
-        ? {
-            fileName: sampleDoc.fileName,
-            fileCreatedAt: sampleDoc.fileCreatedAt,
-            modifiedAt: sampleDoc.modifiedAt,
-            fileAccessedAt: sampleDoc.fileAccessedAt,
-            scannedAt: sampleDoc.scannedAt,
-          }
-        : null,
+      sampleMetadata: sampleDoc || null,
     });
   } catch (err) {
-    console.error("❌ Scan error:", err);
+    console.error("❌ Network scan error:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// Route to scan mounted network share
-app.post("/scan-network-share", async (req, res) => {
-  try {
-    console.log("\n🚀 Starting network share scan...");
-    const FileMeta = require("./models/FileMeta");
-    const countBefore = await FileMeta.countDocuments();
-
-    // Scan the mounted network share at /mnt/pdfs
-    await scanDrive("/mnt/pdfs", "NETWORK");
-
-    const countAfter = await FileMeta.countDocuments();
-    const newDocs = countAfter - countBefore;
-
-    console.log("\n✅ Network share scan completed!");
-    console.log(
-      `📊 Documents before: ${countBefore}, after: ${countAfter}, new: ${newDocs}`
-    );
-
-    // Get a sample document to show metadata in response
-    const sampleDoc = await FileMeta.findOne().sort({ scannedAt: -1 });
-
-    res.json({
-      message: "Network share scanned & data saved",
-      stats: {
-        documentsBefore: countBefore,
-        documentsAfter: countAfter,
-        newDocuments: newDocs,
-      },
-      sampleMetadata: sampleDoc
-        ? {
-            fileName: sampleDoc.fileName,
-            fileCreatedAt: sampleDoc.fileCreatedAt,
-            modifiedAt: sampleDoc.modifiedAt,
-            fileAccessedAt: sampleDoc.fileAccessedAt,
-            scannedAt: sampleDoc.scannedAt,
-          }
-        : null,
-    });
-  } catch (err) {
-    console.error("❌ Scan error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Generic route to scan any path
+// =======================================================
+// 2️⃣ GENERIC SCAN (ANY PATH – OPTIONAL)
+// =======================================================
 app.post("/scan", async (req, res) => {
   try {
-    const { path: scanPath, drive = "CUSTOM" } = req.body;
+    const { scanPath, drive = "CUSTOM" } = req.body;
 
     if (!scanPath) {
-      return res
-        .status(400)
-        .json({ error: "Path is required in request body" });
+      return res.status(400).json({
+        error: "scanPath is required in request body",
+      });
     }
 
-    console.log(`\n🚀 Starting scan of: ${scanPath}`);
-    const FileMeta = require("./models/FileMeta");
+    if (!fs.existsSync(scanPath)) {
+      return res.status(404).json({
+        error: `Path does not exist: ${scanPath}`,
+      });
+    }
+
+    console.log(`\n🚀 Starting custom scan: ${scanPath}`);
+
     const countBefore = await FileMeta.countDocuments();
 
     await scanDrive(scanPath, drive);
@@ -128,13 +85,10 @@ app.post("/scan", async (req, res) => {
     const countAfter = await FileMeta.countDocuments();
     const newDocs = countAfter - countBefore;
 
-    console.log(`\n✅ Scan of ${scanPath} completed!`);
-    console.log(
-      `📊 Documents before: ${countBefore}, after: ${countAfter}, new: ${newDocs}`
-    );
+    console.log("✅ Custom scan completed");
 
     res.json({
-      message: `Scan of ${scanPath} completed & data saved`,
+      message: "Scan completed",
       stats: {
         documentsBefore: countBefore,
         documentsAfter: countAfter,
@@ -142,94 +96,101 @@ app.post("/scan", async (req, res) => {
       },
     });
   } catch (err) {
-    console.error("❌ Scan error:", err);
+    console.error("❌ Custom scan error:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// Route to list files in a folder (without scanning)
+// =======================================================
+// 3️⃣ LIST FILES FROM DB (FIXED 404)
+// =======================================================
+app.get("/files", async (req, res) => {
+  try {
+    const { limit = 50, drive, folderPath } = req.query;
+
+    let query = {};
+    if (drive) query.drive = drive;
+    if (folderPath) query.folderPath = { $regex: folderPath, $options: "i" };
+
+    const files = await FileMeta.find(query)
+      .sort({ scannedAt: -1 })
+      .limit(parseInt(limit));
+
+    res.json({
+      total: files.length,
+      files,
+    });
+  } catch (err) {
+    console.error("❌ Fetch files error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// =======================================================
+// 4️⃣ LIST FOLDER CONTENTS (NO DB, DIRECT FS)
+// =======================================================
 app.get("/list-folder", async (req, res) => {
   try {
-    const { path: folderPath } = req.query;
-    const fs = require("fs");
-    const path = require("path");
+    const folderPath = req.query.path;
 
     if (!folderPath) {
-      return res
-        .status(400)
-        .json({ error: "Path query parameter is required" });
+      return res.status(400).json({
+        error: "Query param ?path= is required",
+      });
     }
 
-    console.log(`\n📋 Listing contents of: ${folderPath}`);
-
     if (!fs.existsSync(folderPath)) {
-      return res.status(404).json({ error: `Path not found: ${folderPath}` });
+      return res.status(404).json({
+        error: `Path not found: ${folderPath}`,
+      });
     }
 
     const stats = fs.statSync(folderPath);
     if (!stats.isDirectory()) {
-      return res
-        .status(400)
-        .json({ error: `Path is not a directory: ${folderPath}` });
+      return res.status(400).json({
+        error: "Provided path is not a directory",
+      });
     }
 
     const items = fs.readdirSync(folderPath);
-    const result = {
-      path: folderPath,
-      totalItems: items.length,
-      items: [],
-    };
 
-    for (const item of items) {
+    const result = items.map((item) => {
       const fullPath = path.join(folderPath, item);
       try {
         const stat = fs.statSync(fullPath);
-        result.items.push({
+        return {
           name: item,
           type: stat.isDirectory() ? "directory" : "file",
-          size: stat.isFile() ? stat.size : null,
+          sizeBytes: stat.isFile() ? stat.size : null,
           sizeMB: stat.isFile()
             ? +(stat.size / (1024 * 1024)).toFixed(2)
             : null,
-          modifiedAt: stat.mtime,
           createdAt: stat.birthtime || stat.ctime,
+          modifiedAt: stat.mtime,
           accessedAt: stat.atime,
-        });
-      } catch (err) {
-        result.items.push({
+        };
+      } catch (e) {
+        return {
           name: item,
-          type: "unknown",
-          error: err.message,
-        });
+          error: e.message,
+        };
       }
-    }
+    });
 
-    console.log(`✅ Found ${result.items.length} items in ${folderPath}`);
-    res.json(result);
+    res.json({
+      path: folderPath,
+      totalItems: result.length,
+      items: result,
+    });
   } catch (err) {
     console.error("❌ List folder error:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// 🔥 THIS ROUTE WAS MISSING (404 fix)
-app.get("/files", async (req, res) => {
-  const FileMeta = require("./models/FileMeta");
-  const { limit = 50, drive, folderPath } = req.query;
-
-  let query = {};
-  if (drive) query.drive = drive;
-  if (folderPath) query.folderPath = { $regex: folderPath, $options: "i" };
-
-  const files = await FileMeta.find(query)
-    .limit(parseInt(limit))
-    .sort({ scannedAt: -1 });
-  res.json({
-    total: files.length,
-    files: files,
-  });
-});
-
-app.listen(3001, () => {
-  console.log("Backend running on port 3001");
+// =======================================================
+// SERVER START
+// =======================================================
+app.listen(3001, "0.0.0.0", () => {
+  console.log("✅ Backend running on port 3001");
 });
