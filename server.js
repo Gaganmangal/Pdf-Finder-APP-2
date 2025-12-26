@@ -9,11 +9,26 @@ connectDB();
 
 app.post("/scan-d-drive", async (req, res) => {
   try {
+    const fs = require("fs");
+    const scanPath = "D:/";
+
     console.log("\n🚀 Starting D drive scan...");
+
+    // Check if path exists (Windows only - won't work on EC2/Linux)
+    if (!fs.existsSync(scanPath)) {
+      const errorMsg = `Path "${scanPath}" does not exist. This route is for Windows D drive only. On EC2/Linux, use /scan-network-share instead.`;
+      console.error(`❌ ${errorMsg}`);
+      return res.status(404).json({
+        error: errorMsg,
+        suggestion:
+          "Use POST /scan-network-share for EC2/Linux network share scanning",
+      });
+    }
+
     const FileMeta = require("./models/FileMeta");
     const countBefore = await FileMeta.countDocuments();
 
-    await scanDrive("D:/", "D"); // EC2 instance
+    await scanDrive(scanPath, "D");
 
     const countAfter = await FileMeta.countDocuments();
     const newDocs = countAfter - countBefore;

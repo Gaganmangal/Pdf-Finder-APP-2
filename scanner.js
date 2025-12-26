@@ -14,7 +14,8 @@ async function scanDirectory(dir, drive = "D") {
     );
   } catch (err) {
     console.error(`❌ Cannot read directory ${dir}:`, err.message);
-    return;
+    console.error(`   Path might not exist or permission denied`);
+    return { fileCount: 0, dirCount: 0 };
   }
 
   for (const item of items) {
