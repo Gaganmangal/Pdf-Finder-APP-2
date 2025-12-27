@@ -2,6 +2,33 @@ const fs = require("fs");
 const path = require("path");
 const FileMeta = require("./models/FileMeta");
 
+// Batch size for MongoDB bulk inserts (optimized for performance)
+const BATCH_SIZE = 1000;
+const LOG_INTERVAL = 100; // Log progress every N files
+
+// Global counters for progress tracking
+let totalFilesScanned = 0;
+let totalDirsScanned = 0;
+let batchBuffer = [];
+let lastLogTime = Date.now();
+
+async function flushBatch() {
+  if (batchBuffer.length === 0) return;
+
+  try {
+    // Use bulkWrite for better performance
+    const operations = batchBuffer.map((doc) => ({
+      insertOne: { document: doc },
+    }));
+
+    await FileMeta.bulkWrite(operations, { ordered: false });
+    batchBuffer = [];
+  } catch (err) {
+    console.error(`❌ Batch insert error:`, err.message);
+    batchBuffer = []; // Clear buffer on error to prevent memory issues
+  }
+}
+
 async function scanDirectory(dir, drive = "D") {
   let items;
   let fileCount = 0;
@@ -9,12 +36,8 @@ async function scanDirectory(dir, drive = "D") {
 
   try {
     items = fs.readdirSync(dir);
-    console.log(
-      `\n📁 Scanning directory: ${dir} (${items.length} items found)`
-    );
   } catch (err) {
-    console.error(`❌ Cannot read directory ${dir}:`, err.message);
-    console.error(`   Path might not exist or permission denied`);
+    // Silently skip directories we can't read (permissions, etc.)
     return { fileCount: 0, dirCount: 0 };
   }
 
@@ -25,27 +48,29 @@ async function scanDirectory(dir, drive = "D") {
     try {
       stat = fs.statSync(fullPath);
     } catch {
-      continue;
+      continue; // Skip files we can't stat
     }
 
     if (stat.isDirectory()) {
       dirCount++;
+      totalDirsScanned++;
       // Recursively scan subdirectories
-      await scanDirectory(fullPath, drive);
+      const result = await scanDirectory(fullPath, drive);
+      fileCount += result.fileCount;
+      dirCount += result.dirCount;
     } else if (stat.isFile()) {
       try {
-        // Get file timestamps - on Windows, stat.birthtime should work but verify it's valid
-        // If birthtime is invalid (epoch 0 or future date), use ctime as fallback
+        // Get file timestamps - optimized timestamp handling
         let fileCreated = stat.birthtime;
         if (
           !fileCreated ||
           fileCreated.getTime() <= 0 ||
           fileCreated.getTime() > Date.now()
         ) {
-          fileCreated = stat.ctime; // Use ctime (status change time) as fallback on Windows
+          fileCreated = stat.ctime;
         }
 
-        // Ensure all timestamps are valid Date objects
+        // Build metadata object (no Date conversion here for performance)
         const fileMetadata = {
           fileName: item,
           fullPath,
@@ -54,50 +79,81 @@ async function scanDirectory(dir, drive = "D") {
           sizeBytes: stat.size,
           sizeMB: +(stat.size / (1024 * 1024)).toFixed(2),
           drive,
-          fileCreatedAt: new Date(fileCreated), // File creation time from D drive
-          modifiedAt: new Date(stat.mtime), // File modification time from D drive
-          fileAccessedAt: new Date(stat.atime), // File access time from D drive
-          scannedAt: new Date(), // When document was created in MongoDB
+          fileCreatedAt: fileCreated,
+          modifiedAt: stat.mtime,
+          fileAccessedAt: stat.atime,
+          scannedAt: new Date(),
         };
 
-        // Console log to show metadata being read from file system
-        console.log(`\n📄 File Metadata from ${drive}:`, {
-          fileName: fileMetadata.fileName,
-          fullPath: fileMetadata.fullPath,
-          sizeMB: fileMetadata.sizeMB,
-          fileCreatedAt: fileMetadata.fileCreatedAt.toISOString(),
-          modifiedAt: fileMetadata.modifiedAt.toISOString(),
-          fileAccessedAt: fileMetadata.fileAccessedAt.toISOString(),
-        });
-
-        // Create new document to allow duplicates
-        const savedDoc = await FileMeta.create(fileMetadata);
+        // Add to batch buffer
+        batchBuffer.push(fileMetadata);
         fileCount++;
-        console.log(`✅ Saved to MongoDB (${fileCount}) - _id:`, savedDoc._id);
-        console.log("   Saved Document Timestamps:", {
-          fileCreatedAt: savedDoc.fileCreatedAt
-            ? savedDoc.fileCreatedAt.toISOString()
-            : "MISSING",
-          modifiedAt: savedDoc.modifiedAt
-            ? savedDoc.modifiedAt.toISOString()
-            : "MISSING",
-          fileAccessedAt: savedDoc.fileAccessedAt
-            ? savedDoc.fileAccessedAt.toISOString()
-            : "MISSING",
-        });
+        totalFilesScanned++;
+
+        // Flush batch when it reaches BATCH_SIZE
+        if (batchBuffer.length >= BATCH_SIZE) {
+          await flushBatch();
+        }
+
+        // Log progress periodically (not every file)
+        if (totalFilesScanned % LOG_INTERVAL === 0) {
+          const now = Date.now();
+          const elapsed = (now - lastLogTime) / 1000;
+          const rate = LOG_INTERVAL / elapsed;
+          const totalMB = batchBuffer.reduce(
+            (sum, f) => sum + (f.sizeMB || 0),
+            0
+          );
+
+          console.log(
+            `📊 Progress: ${totalFilesScanned} files scanned | ${totalDirsScanned} dirs | ${rate.toFixed(1)} files/sec | Rate: ${(totalMB / elapsed).toFixed(2)} MB/s`
+          );
+          lastLogTime = now;
+        }
       } catch (err) {
-        console.error(`❌ Error saving file ${fullPath}:`, err.message);
+        // Silently skip files that cause errors
+        continue;
       }
     }
-  }
-
-  if (fileCount > 0 || dirCount > 0) {
-    console.log(`\n📊 Summary for ${dir}:`);
-    console.log(`   Files found: ${fileCount}`);
-    console.log(`   Directories scanned: ${dirCount}`);
   }
 
   return { fileCount, dirCount };
 }
 
-module.exports = scanDirectory;
+async function scanDirectoryWithStats(dir, drive = "D") {
+  // Reset global counters
+  totalFilesScanned = 0;
+  totalDirsScanned = 0;
+  batchBuffer = [];
+  lastLogTime = Date.now();
+
+  const startTime = Date.now();
+  console.log(`\n🚀 Starting scan of: ${dir}`);
+  console.log(`📦 Batch size: ${BATCH_SIZE} files per insert`);
+
+  // Start scanning
+  const result = await scanDirectory(dir, drive);
+
+  // Flush any remaining items in buffer
+  await flushBatch();
+
+  const endTime = Date.now();
+  const duration = ((endTime - startTime) / 1000).toFixed(2);
+  const filesPerSec = (totalFilesScanned / (duration || 1)).toFixed(2);
+
+  console.log(`\n✅ Scan completed!`);
+  console.log(`📊 Final Stats:`);
+  console.log(`   Files scanned: ${totalFilesScanned}`);
+  console.log(`   Directories scanned: ${totalDirsScanned}`);
+  console.log(`   Duration: ${duration}s`);
+  console.log(`   Speed: ${filesPerSec} files/sec`);
+
+  return {
+    fileCount: totalFilesScanned,
+    dirCount: totalDirsScanned,
+    duration: parseFloat(duration),
+  };
+}
+
+// Export the optimized scanner function
+module.exports = scanDirectoryWithStats;
