@@ -21,9 +21,6 @@ app.post("/scan-network-share", async (req, res) => {
   try {
     const scanPath = "/mnt/pdfs";
 
-    console.log("\n🚀 Starting network share scan...");
-    console.log(`📁 Scan path: ${scanPath}`);
-
     if (!fs.existsSync(scanPath)) {
       return res.status(404).json({
         error: `Mount path not found: ${scanPath}`,
@@ -40,8 +37,6 @@ app.post("/scan-network-share", async (req, res) => {
 
     const sampleDoc = await FileMeta.findOne().sort({ scannedAt: -1 });
 
-    console.log("✅ Network share scan completed");
-
     res.json({
       message: "Network share scanned successfully",
       stats: {
@@ -52,7 +47,6 @@ app.post("/scan-network-share", async (req, res) => {
       sampleMetadata: sampleDoc || null,
     });
   } catch (err) {
-    console.error("❌ Network scan error:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -76,16 +70,12 @@ app.post("/scan", async (req, res) => {
       });
     }
 
-    console.log(`\n🚀 Starting custom scan: ${scanPath}`);
-
     const countBefore = await FileMeta.countDocuments();
 
     await scanDrive(scanPath, drive);
 
     const countAfter = await FileMeta.countDocuments();
     const newDocs = countAfter - countBefore;
-
-    console.log("✅ Custom scan completed");
 
     res.json({
       message: "Scan completed",
@@ -96,7 +86,6 @@ app.post("/scan", async (req, res) => {
       },
     });
   } catch (err) {
-    console.error("❌ Custom scan error:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -121,7 +110,6 @@ app.get("/files", async (req, res) => {
       files,
     });
   } catch (err) {
-    console.error("❌ Fetch files error:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -183,7 +171,6 @@ app.get("/list-folder", async (req, res) => {
       items: result,
     });
   } catch (err) {
-    console.error("❌ List folder error:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -191,6 +178,4 @@ app.get("/list-folder", async (req, res) => {
 // =======================================================
 // SERVER START
 // =======================================================
-app.listen(3001, "0.0.0.0", () => {
-  console.log("✅ Backend running on port 3001");
-});
+app.listen(3001, "0.0.0.0");
