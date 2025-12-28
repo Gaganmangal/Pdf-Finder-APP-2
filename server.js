@@ -178,25 +178,44 @@ app.get("/list-folder", async (req, res) => {
 // =======================================================
 // 5️⃣ DETECT DUPLICATES
 // =======================================================
+// app.post("/detect-duplicates", async (req, res) => {
+//   try {
+//     const { detectAndSaveDuplicates } = require("./services/detectDuplicates");
+
+//     const startTime = Date.now();
+//     const result = await detectAndSaveDuplicates();
+//     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+
+//     res.json({
+//       message: "Duplicate detection completed",
+//       stats: {
+//         totalDuplicateGroups: result.totalGroups,
+//         totalDuplicateFiles: result.totalDuplicateFiles,
+//         duration: `${duration}s`,
+//       },
+//     });
+//   } catch (err) {
+//     res.status(500).json({ error: err.message });
+//   }
+// });
+
 app.post("/detect-duplicates", async (req, res) => {
-  try {
-    const { detectAndSaveDuplicates } = require("./services/detectDuplicates");
+  const { detectAndSaveDuplicates } = require("./services/detectDuplicates");
+  // 1️⃣ Turant response
+  res.json({
+    message: "Duplicate detection started in background",
+  });
 
-    const startTime = Date.now();
-    const result = await detectAndSaveDuplicates();
-    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-
-    res.json({
-      message: "Duplicate detection completed",
-      stats: {
-        totalDuplicateGroups: result.totalGroups,
-        totalDuplicateFiles: result.totalDuplicateFiles,
-        duration: `${duration}s`,
-      },
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  // 2️⃣ Background execution
+  setImmediate(async () => {
+    try {
+      console.log("🚀 Duplicate detection started...");
+      await detectAndSaveDuplicates();
+      console.log("✅ Duplicate detection finished");
+    } catch (err) {
+      console.error("❌ Duplicate detection failed:", err.message);
+    }
+  });
 });
 
 // =======================================================
