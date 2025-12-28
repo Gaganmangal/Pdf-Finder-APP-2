@@ -5,7 +5,7 @@ const DuplicateFileSchema = new mongoose.Schema(
     fingerprint: {
       type: String,
       required: true,
-      index: true, // Index for fast lookups
+      //   index: true, // Index for fast lookups
     },
     fileName: {
       type: String,
