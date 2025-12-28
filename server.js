@@ -176,6 +176,53 @@ app.get("/list-folder", async (req, res) => {
 });
 
 // =======================================================
+// 5️⃣ DETECT DUPLICATES
+// =======================================================
+app.post("/detect-duplicates", async (req, res) => {
+  try {
+    const { detectAndSaveDuplicates } = require("./services/detectDuplicates");
+
+    const startTime = Date.now();
+    const result = await detectAndSaveDuplicates();
+    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+
+    res.json({
+      message: "Duplicate detection completed",
+      stats: {
+        totalDuplicateGroups: result.totalGroups,
+        totalDuplicateFiles: result.totalDuplicateFiles,
+        duration: `${duration}s`,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// =======================================================
+// 6️⃣ GET DUPLICATES
+// =======================================================
+app.get("/duplicates", async (req, res) => {
+  try {
+    const { getDuplicates } = require("./services/detectDuplicates");
+
+    const { limit = 100, skip = 0, minCount = 2, extension, drive } = req.query;
+
+    const result = await getDuplicates({
+      limit: parseInt(limit),
+      skip: parseInt(skip),
+      minCount: parseInt(minCount),
+      extension,
+      drive,
+    });
+
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// =======================================================
 // SERVER START
 // =======================================================
 app.listen(3001, "0.0.0.0");
