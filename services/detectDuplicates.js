@@ -27,56 +27,56 @@ async function detectDuplicates() {
   let processedCount = 0;
 
   // Use cursor for memory-efficient processing
-  // Use collection.aggregate() directly for proper allowDiskUse support
-  const cursor = FileMeta.collection.aggregate(
-    [
-      // Match only files that have required fields
-      {
-        $match: {
-          fileName: { $exists: true, $ne: null, $ne: "" },
-          extension: { $exists: true, $ne: null },
-          sizeBytes: { $exists: true, $type: "number", $gt: 0 },
-        },
-      },
-      // Create fingerprint directly (more efficient)
-      {
-        $addFields: {
-          fingerprint: {
-            $concat: [
-              { $toLower: { $trim: { input: "$fileName" } } },
-              "::",
-              { $ifNull: ["$extension", ""] },
-              "::",
-              { $toString: "$sizeBytes" },
-            ],
-          },
-        },
-      },
-      // Group by fingerprint - only count first (memory efficient)
-      {
-        $group: {
-          _id: "$fingerprint",
-          count: { $sum: 1 },
-          // Store minimal data in group stage
-          firstFile: { $first: "$$ROOT" },
-        },
-      },
-      // Filter duplicates only (count > 1)
-      {
-        $match: {
-          count: { $gt: 1 },
-        },
-      },
-      // Sort by count (for processing priority)
-      {
-        $sort: { count: -1 },
-      },
-    ],
+  // Use collection.aggregate() with explicit allowDiskUse option
+  const pipeline = [
+    // Match only files that have required fields
     {
-      allowDiskUse: true,
-      cursor: { batchSize: BATCH_SIZE },
-    }
-  );
+      $match: {
+        fileName: { $exists: true, $ne: null, $ne: "" },
+        extension: { $exists: true, $ne: null },
+        sizeBytes: { $exists: true, $type: "number", $gt: 0 },
+      },
+    },
+    // Create fingerprint directly (more efficient)
+    {
+      $addFields: {
+        fingerprint: {
+          $concat: [
+            { $toLower: { $trim: { input: "$fileName" } } },
+            "::",
+            { $ifNull: ["$extension", ""] },
+            "::",
+            { $toString: "$sizeBytes" },
+          ],
+        },
+      },
+    },
+    // Group by fingerprint - only count first (memory efficient)
+    {
+      $group: {
+        _id: "$fingerprint",
+        count: { $sum: 1 },
+        // Store minimal data in group stage
+        firstFile: { $first: "$$ROOT" },
+      },
+    },
+    // Filter duplicates only (count > 1)
+    {
+      $match: {
+        count: { $gt: 1 },
+      },
+    },
+    // Sort by count (for processing priority)
+    {
+      $sort: { count: -1 },
+    },
+  ];
+
+  // Use native MongoDB driver aggregate with allowDiskUse
+  const cursor = FileMeta.collection.aggregate(pipeline, {
+    allowDiskUse: true,
+    cursor: { batchSize: BATCH_SIZE },
+  });
 
   // Process cursor in batches
   for await (const group of cursor) {
@@ -155,50 +155,50 @@ async function detectAndSaveDuplicates() {
   let batchBuffer = [];
 
   // Process duplicates in streaming fashion
-  // Use collection.aggregate() directly for better allowDiskUse support
-  const cursor = FileMeta.collection.aggregate(
-    [
-      {
-        $match: {
-          fileName: { $exists: true, $ne: null, $ne: "" },
-          extension: { $exists: true, $ne: null },
-          sizeBytes: { $exists: true, $type: "number", $gt: 0 },
-        },
-      },
-      {
-        $addFields: {
-          fingerprint: {
-            $concat: [
-              { $toLower: { $trim: { input: "$fileName" } } },
-              "::",
-              { $ifNull: ["$extension", ""] },
-              "::",
-              { $toString: "$sizeBytes" },
-            ],
-          },
-        },
-      },
-      {
-        $group: {
-          _id: "$fingerprint",
-          count: { $sum: 1 },
-          firstFile: { $first: "$$ROOT" },
-        },
-      },
-      {
-        $match: {
-          count: { $gt: 1 },
-        },
-      },
-      {
-        $sort: { count: -1 },
-      },
-    ],
+  // Use collection.aggregate() with explicit allowDiskUse option
+  const pipeline = [
     {
-      allowDiskUse: true,
-      cursor: { batchSize: 1000 },
-    }
-  );
+      $match: {
+        fileName: { $exists: true, $ne: null, $ne: "" },
+        extension: { $exists: true, $ne: null },
+        sizeBytes: { $exists: true, $type: "number", $gt: 0 },
+      },
+    },
+    {
+      $addFields: {
+        fingerprint: {
+          $concat: [
+            { $toLower: { $trim: { input: "$fileName" } } },
+            "::",
+            { $ifNull: ["$extension", ""] },
+            "::",
+            { $toString: "$sizeBytes" },
+          ],
+        },
+      },
+    },
+    {
+      $group: {
+        _id: "$fingerprint",
+        count: { $sum: 1 },
+        firstFile: { $first: "$$ROOT" },
+      },
+    },
+    {
+      $match: {
+        count: { $gt: 1 },
+      },
+    },
+    {
+      $sort: { count: -1 },
+    },
+  ];
+
+  // Use native MongoDB driver aggregate with allowDiskUse
+  const cursor = FileMeta.collection.aggregate(pipeline, {
+    allowDiskUse: true,
+    cursor: { batchSize: 1000 },
+  });
 
   let processedGroups = 0;
 
