@@ -27,7 +27,8 @@ async function detectDuplicates() {
   let processedCount = 0;
 
   // Use cursor for memory-efficient processing
-  const cursor = FileMeta.aggregate(
+  // Use collection.aggregate() directly for proper allowDiskUse support
+  const cursor = FileMeta.collection.aggregate(
     [
       // Match only files that have required fields
       {
@@ -154,7 +155,8 @@ async function detectAndSaveDuplicates() {
   let batchBuffer = [];
 
   // Process duplicates in streaming fashion
-  const cursor = FileMeta.aggregate(
+  // Use collection.aggregate() directly for better allowDiskUse support
+  const cursor = FileMeta.collection.aggregate(
     [
       {
         $match: {
