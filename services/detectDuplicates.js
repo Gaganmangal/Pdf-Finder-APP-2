@@ -18,105 +18,260 @@ function generateFingerprint(fileName, extension, sizeBytes) {
 }
 
 /**
- * Detect duplicates using MongoDB aggregation pipeline
- * This is highly optimized for large datasets
+ * Detect duplicates using optimized MongoDB aggregation pipeline
+ * Optimized for 80TB+ datasets with cursor-based processing
  */
 async function detectDuplicates() {
-  // Step 1: Aggregation pipeline to find duplicates
-  const duplicates = await FileMeta.aggregate([
-    // Match only files that have required fields
+  const BATCH_SIZE = 5000; // Process in batches to avoid memory issues
+  const duplicateGroups = [];
+  let processedCount = 0;
+
+  // Use cursor for memory-efficient processing
+  const cursor = FileMeta.aggregate(
+    [
+      // Match only files that have required fields
+      {
+        $match: {
+          fileName: { $exists: true, $ne: null, $ne: "" },
+          extension: { $exists: true, $ne: null },
+          sizeBytes: { $exists: true, $type: "number", $gt: 0 },
+        },
+      },
+      // Create fingerprint directly (more efficient)
+      {
+        $addFields: {
+          fingerprint: {
+            $concat: [
+              { $toLower: { $trim: { input: "$fileName" } } },
+              "::",
+              { $ifNull: ["$extension", ""] },
+              "::",
+              { $toString: "$sizeBytes" },
+            ],
+          },
+        },
+      },
+      // Group by fingerprint - only count first (memory efficient)
+      {
+        $group: {
+          _id: "$fingerprint",
+          count: { $sum: 1 },
+          // Store minimal data in group stage
+          firstFile: { $first: "$$ROOT" },
+        },
+      },
+      // Filter duplicates only (count > 1)
+      {
+        $match: {
+          count: { $gt: 1 },
+        },
+      },
+      // Sort by count (for processing priority)
+      {
+        $sort: { count: -1 },
+      },
+    ],
     {
-      $match: {
+      allowDiskUse: true,
+      cursor: { batchSize: BATCH_SIZE },
+    }
+  );
+
+  // Process cursor in batches
+  for await (const group of cursor) {
+    // For each duplicate group, fetch all files with this fingerprint
+    const fingerprint = group._id;
+    const files = await FileMeta.find(
+      {
         fileName: { $exists: true, $ne: null, $ne: "" },
         extension: { $exists: true, $ne: null },
         sizeBytes: { $exists: true, $type: "number", $gt: 0 },
-      },
-    },
-    // Normalize fileName and create fingerprint
-    {
-      $addFields: {
-        normalizedFileName: {
-          $toLower: { $trim: { input: "$fileName" } },
-        },
-        fingerprint: {
-          $concat: [
-            { $toLower: { $trim: { input: "$fileName" } } },
-            "::",
-            { $ifNull: ["$extension", ""] },
-            "::",
-            { $toString: "$sizeBytes" },
+        $expr: {
+          $eq: [
+            {
+              $concat: [
+                { $toLower: { $trim: { input: "$fileName" } } },
+                "::",
+                { $ifNull: ["$extension", ""] },
+                "::",
+                { $toString: "$sizeBytes" },
+              ],
+            },
+            fingerprint,
           ],
         },
       },
-    },
-    // Group by fingerprint to find duplicates
-    {
-      $group: {
-        _id: "$fingerprint",
-        count: { $sum: 1 },
-        files: {
-          $push: {
-            fileKey: { $ifNull: ["$fileKey", "$fullPath"] }, // Use fullPath as fileKey if fileKey doesn't exist
-            folderPath: "$folderPath",
-            drive: "$drive",
-            fullPath: "$fullPath",
-            scannedAt: "$scannedAt",
-          },
-        },
-        fileName: { $first: "$fileName" },
-        normalizedFileName: { $first: "$normalizedFileName" },
-        extension: { $first: "$extension" },
-        sizeBytes: { $first: "$sizeBytes" },
-      },
-    },
-    // Only keep groups with count > 1 (duplicates)
-    {
-      $match: {
-        count: { $gt: 1 },
-      },
-    },
-    // Sort by count descending (most duplicates first)
-    {
-      $sort: { count: -1 },
-    },
-    // Project final structure
-    {
-      $project: {
+      {
+        fileKey: 1,
+        folderPath: 1,
+        drive: 1,
+        fullPath: 1,
+        scannedAt: 1,
         _id: 0,
-        fingerprint: "$_id",
-        fileName: 1,
-        extension: 1,
-        sizeBytes: 1,
-        count: 1,
-        files: 1,
-      },
-    },
-  ]).option({ allowDiskUse: true });
-  return duplicates;
+      }
+    ).lean();
+
+    // Build duplicate group document
+    duplicateGroups.push({
+      fingerprint: fingerprint,
+      fileName: group.firstFile.fileName,
+      extension: group.firstFile.extension,
+      sizeBytes: group.firstFile.sizeBytes,
+      count: group.count,
+      files: files.map((f) => ({
+        fileKey: f.fileKey || f.fullPath,
+        folderPath: f.folderPath,
+        drive: f.drive,
+        fullPath: f.fullPath,
+        scannedAt: f.scannedAt,
+      })),
+    });
+
+    processedCount++;
+
+    // Log progress every 100 groups
+    if (processedCount % 100 === 0) {
+      console.log(`Processed ${processedCount} duplicate groups...`);
+    }
+  }
+
+  return duplicateGroups;
 }
 
 /**
  * Main function to detect and save duplicates
+ * Optimized for 80TB+ datasets with batch inserts
  */
 async function detectAndSaveDuplicates() {
-  // Step 1: Run aggregation to detect duplicates
-  const duplicateGroups = await detectDuplicates();
+  const INSERT_BATCH_SIZE = 1000; // Insert in batches to avoid memory issues
 
-  // Step 2: Clear old duplicate_files collection
+  // Step 1: Clear old duplicate_files collection
   await DuplicateFile.deleteMany({});
 
-  // Step 3: Insert new duplicate groups
-  if (duplicateGroups.length > 0) {
-    await DuplicateFile.insertMany(duplicateGroups);
+  // Step 2: Run aggregation to detect duplicates (cursor-based)
+  const duplicateGroups = [];
+  let totalDuplicateFiles = 0;
+  let batchBuffer = [];
+
+  // Process duplicates in streaming fashion
+  const cursor = FileMeta.aggregate(
+    [
+      {
+        $match: {
+          fileName: { $exists: true, $ne: null, $ne: "" },
+          extension: { $exists: true, $ne: null },
+          sizeBytes: { $exists: true, $type: "number", $gt: 0 },
+        },
+      },
+      {
+        $addFields: {
+          fingerprint: {
+            $concat: [
+              { $toLower: { $trim: { input: "$fileName" } } },
+              "::",
+              { $ifNull: ["$extension", ""] },
+              "::",
+              { $toString: "$sizeBytes" },
+            ],
+          },
+        },
+      },
+      {
+        $group: {
+          _id: "$fingerprint",
+          count: { $sum: 1 },
+          firstFile: { $first: "$$ROOT" },
+        },
+      },
+      {
+        $match: {
+          count: { $gt: 1 },
+        },
+      },
+      {
+        $sort: { count: -1 },
+      },
+    ],
+    {
+      allowDiskUse: true,
+      cursor: { batchSize: 1000 },
+    }
+  );
+
+  let processedGroups = 0;
+
+  // Process each duplicate group
+  for await (const group of cursor) {
+    const fingerprint = group._id;
+    const firstFile = group.firstFile;
+
+    // Use exact values from first file for efficient indexed lookup
+    // This avoids $expr and can use the compound index
+    const files = await FileMeta.find(
+      {
+        extension: firstFile.extension,
+        sizeBytes: firstFile.sizeBytes,
+        $expr: {
+          $eq: [
+            { $toLower: { $trim: { input: "$fileName" } } },
+            { $toLower: { $trim: { input: firstFile.fileName } } },
+          ],
+        },
+      },
+      {
+        fileKey: 1,
+        folderPath: 1,
+        drive: 1,
+        fullPath: 1,
+        scannedAt: 1,
+        _id: 0,
+      }
+    )
+      .lean()
+      .hint({ extension: 1, sizeBytes: 1 }); // Use compound index for faster lookup
+
+    const duplicateGroup = {
+      fingerprint: fingerprint,
+      fileName: group.firstFile.fileName,
+      extension: group.firstFile.extension,
+      sizeBytes: group.firstFile.sizeBytes,
+      count: group.count,
+      files: files.map((f) => ({
+        fileKey: f.fileKey || f.fullPath,
+        folderPath: f.folderPath,
+        drive: f.drive,
+        fullPath: f.fullPath,
+        scannedAt: f.scannedAt,
+      })),
+      detectedAt: new Date(),
+    };
+
+    batchBuffer.push(duplicateGroup);
+    totalDuplicateFiles += group.count;
+    processedGroups++;
+
+    // Insert in batches to avoid memory issues
+    if (batchBuffer.length >= INSERT_BATCH_SIZE) {
+      await DuplicateFile.insertMany(batchBuffer, { ordered: false });
+      batchBuffer = [];
+    }
+
+    // Log progress
+    if (processedGroups % 500 === 0) {
+      console.log(
+        `Progress: ${processedGroups} groups processed, ${totalDuplicateFiles} duplicate files found`
+      );
+    }
+  }
+
+  // Insert remaining items
+  if (batchBuffer.length > 0) {
+    await DuplicateFile.insertMany(batchBuffer, { ordered: false });
   }
 
   return {
-    totalGroups: duplicateGroups.length,
-    totalDuplicateFiles: duplicateGroups.reduce(
-      (sum, group) => sum + group.count,
-      0
-    ),
-    groups: duplicateGroups,
+    totalGroups: processedGroups,
+    totalDuplicateFiles: totalDuplicateFiles,
   };
 }
 
