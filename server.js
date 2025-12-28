@@ -18,37 +18,36 @@ connectDB();
 // 1️⃣ SCAN NETWORK SHARE (MAIN ROUTE – EC2 LINUX)
 // =======================================================
 app.post("/scan-network-share", async (req, res) => {
-  try {
-    const scanPath = "/mnt/pdfs";
+  const scanPath = "/mnt/pdfs";
 
-    if (!fs.existsSync(scanPath)) {
-      return res.status(404).json({
-        error: `Mount path not found: ${scanPath}`,
-        hint: "Check CIFS mount on Linux EC2",
-      });
-    }
-
-    const countBefore = await FileMeta.countDocuments();
-
-    await scanDrive(scanPath, "NETWORK");
-
-    const countAfter = await FileMeta.countDocuments();
-    const newDocs = countAfter - countBefore;
-
-    const sampleDoc = await FileMeta.findOne().sort({ scannedAt: -1 });
-
-    res.json({
-      message: "Network share scanned successfully",
-      stats: {
-        documentsBefore: countBefore,
-        documentsAfter: countAfter,
-        newDocuments: newDocs,
-      },
-      sampleMetadata: sampleDoc || null,
+  if (!fs.existsSync(scanPath)) {
+    return res.status(404).json({
+      error: `Mount path not found: ${scanPath}`,
+      hint: "Check CIFS mount on Linux EC2",
     });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
   }
+
+  // Return immediately - scan runs in background
+  res.json({
+    message: "Network share scan started in background",
+    scanPath: scanPath,
+  });
+
+  // Background execution (non-blocking)
+  setImmediate(async () => {
+    try {
+      const countBefore = await FileMeta.countDocuments();
+      const result = await scanDrive(scanPath, "NETWORK");
+      const countAfter = await FileMeta.countDocuments();
+
+      // Log completion (can be removed if no console.log desired)
+      console.log(
+        `Scan completed: ${result.fileCount} files, ${result.duplicateGroups} duplicate groups`
+      );
+    } catch (err) {
+      console.error("Scan error:", err.message);
+    }
+  });
 });
 
 // =======================================================

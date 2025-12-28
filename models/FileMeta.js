@@ -9,6 +9,7 @@ const FileMetaSchema = new mongoose.Schema(
     sizeBytes: Number,
     sizeMB: Number,
     drive: String,
+    fingerprint: String, // Lightweight fingerprint for duplicate detection: normalizedFileName::extension::sizeBytes
     fileCreatedAt: Date, // File creation time (from D drive)
     modifiedAt: Date, // File modification time (from D drive)
     fileAccessedAt: Date, // File access time (from D drive)
@@ -16,5 +17,10 @@ const FileMetaSchema = new mongoose.Schema(
   },
   { timestamps: false } // Disabled to use file's actual timestamps
 );
+
+// Index for fingerprint (used for duplicate detection during scan)
+FileMetaSchema.index({ fingerprint: 1 });
+
+module.exports = mongoose.model("FileMeta", FileMetaSchema);
 
 module.exports = mongoose.model("FileMeta", FileMetaSchema);

@@ -26,10 +26,9 @@ const DuplicateFileSchema = new mongoose.Schema(
     },
     files: [
       {
-        fileKey: String,
+        fullPath: String,
         folderPath: String,
         drive: String,
-        fullPath: String,
         scannedAt: Date,
       },
     ],
@@ -42,9 +41,8 @@ const DuplicateFileSchema = new mongoose.Schema(
   { timestamps: false }
 );
 
-// Compound index for faster queries
-DuplicateFileSchema.index({ count: -1, detectedAt: -1 });
-DuplicateFileSchema.index({ extension: 1, sizeBytes: -1 });
+// Indexes for efficient duplicate queries
+DuplicateFileSchema.index({ fingerprint: 1 }); // Primary lookup index
+DuplicateFileSchema.index({ count: -1 }); // Sort by most duplicates first
 
 module.exports = mongoose.model("DuplicateFile", DuplicateFileSchema);
-
