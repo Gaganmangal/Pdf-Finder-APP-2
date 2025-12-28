@@ -23,75 +23,78 @@ function generateFingerprint(fileName, extension, sizeBytes) {
  */
 async function detectDuplicates() {
   // Step 1: Aggregation pipeline to find duplicates
-  const duplicates = await FileMeta.aggregate([
-    // Match only files that have required fields
-    {
-      $match: {
-        fileName: { $exists: true, $ne: null, $ne: "" },
-        extension: { $exists: true, $ne: null },
-        sizeBytes: { $exists: true, $type: "number", $gt: 0 },
-      },
-    },
-    // Normalize fileName and create fingerprint
-    {
-      $addFields: {
-        normalizedFileName: {
-          $toLower: { $trim: { input: "$fileName" } },
-        },
-        fingerprint: {
-          $concat: [
-            { $toLower: { $trim: { input: "$fileName" } } },
-            "::",
-            { $ifNull: ["$extension", ""] },
-            "::",
-            { $toString: "$sizeBytes" },
-          ],
+  const duplicates = await FileMeta.aggregate(
+    [
+      // Match only files that have required fields
+      {
+        $match: {
+          fileName: { $exists: true, $ne: null, $ne: "" },
+          extension: { $exists: true, $ne: null },
+          sizeBytes: { $exists: true, $type: "number", $gt: 0 },
         },
       },
-    },
-    // Group by fingerprint to find duplicates
-    {
-      $group: {
-        _id: "$fingerprint",
-        count: { $sum: 1 },
-        files: {
-          $push: {
-            fileKey: { $ifNull: ["$fileKey", "$fullPath"] }, // Use fullPath as fileKey if fileKey doesn't exist
-            folderPath: "$folderPath",
-            drive: "$drive",
-            fullPath: "$fullPath",
-            scannedAt: "$scannedAt",
+      // Normalize fileName and create fingerprint
+      {
+        $addFields: {
+          normalizedFileName: {
+            $toLower: { $trim: { input: "$fileName" } },
+          },
+          fingerprint: {
+            $concat: [
+              { $toLower: { $trim: { input: "$fileName" } } },
+              "::",
+              { $ifNull: ["$extension", ""] },
+              "::",
+              { $toString: "$sizeBytes" },
+            ],
           },
         },
-        fileName: { $first: "$fileName" },
-        normalizedFileName: { $first: "$normalizedFileName" },
-        extension: { $first: "$extension" },
-        sizeBytes: { $first: "$sizeBytes" },
       },
-    },
-    // Only keep groups with count > 1 (duplicates)
-    {
-      $match: {
-        count: { $gt: 1 },
+      // Group by fingerprint to find duplicates
+      {
+        $group: {
+          _id: "$fingerprint",
+          count: { $sum: 1 },
+          files: {
+            $push: {
+              fileKey: { $ifNull: ["$fileKey", "$fullPath"] }, // Use fullPath as fileKey if fileKey doesn't exist
+              folderPath: "$folderPath",
+              drive: "$drive",
+              fullPath: "$fullPath",
+              scannedAt: "$scannedAt",
+            },
+          },
+          fileName: { $first: "$fileName" },
+          normalizedFileName: { $first: "$normalizedFileName" },
+          extension: { $first: "$extension" },
+          sizeBytes: { $first: "$sizeBytes" },
+        },
       },
-    },
-    // Sort by count descending (most duplicates first)
-    {
-      $sort: { count: -1 },
-    },
-    // Project final structure
-    {
-      $project: {
-        _id: 0,
-        fingerprint: "$_id",
-        fileName: 1,
-        extension: 1,
-        sizeBytes: 1,
-        count: 1,
-        files: 1,
+      // Only keep groups with count > 1 (duplicates)
+      {
+        $match: {
+          count: { $gt: 1 },
+        },
       },
-    },
-  ]);
+      // Sort by count descending (most duplicates first)
+      {
+        $sort: { count: -1 },
+      },
+      // Project final structure
+      {
+        $project: {
+          _id: 0,
+          fingerprint: "$_id",
+          fileName: 1,
+          extension: 1,
+          sizeBytes: 1,
+          count: 1,
+          files: 1,
+        },
+      },
+    ],
+    { allowDiskUse: true }
+  );
 
   return duplicates;
 }
@@ -159,4 +162,3 @@ module.exports = {
   getDuplicates,
   detectDuplicates,
 };
-
