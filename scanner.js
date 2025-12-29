@@ -4,7 +4,7 @@ const { MongoClient } = require("mongodb");
 
 const MONGO_URI =
   "mongodb+srv://Gaganfnr:ndLz9yHCsOmv9S3k@gagan.jhuti8y.mongodb.net/test?appName=Gagan";
-const FILE_ROOT = "D:/PDF"; // Update as needed
+const FILE_ROOT = "mnt/pdfs"; // Update as needed
 const FILEMETA_BATCH_SIZE = 1000;
 const DUPLICATE_BATCH_SIZE = 500;
 // Each value in map is array of { file metadata }
