@@ -9,6 +9,7 @@ async function detectDuplicates() {
 
   const db = client.db();
   const FileMeta = db.collection("FileMeta");
+  // IMPORTANT: Use only native MongoDB driver handle here. DO NOT use Mongoose model!
   const DuplicateFile = db.collection("DuplicateFile");
 
   // Optionally clear previous results for simple reruns

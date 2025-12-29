@@ -1,5 +1,5 @@
 const FileMeta = require("../models/FileMeta");
-const DuplicateFile = require("../models/DuplicateFile");
+// // REMOVED: const DuplicateFile = require("../models/DuplicateFile");
 
 /**
  * Normalize fileName for comparison (lowercase, trim)
@@ -21,7 +21,7 @@ function generateFingerprint(fileName, extension, sizeBytes) {
  * Detect duplicates using optimized MongoDB aggregation pipeline
  * Optimized for 80TB+ datasets with cursor-based processing
  */
-async function detectDuplicates() {
+async // function detectDuplicates() {
   const BATCH_SIZE = 5000; // Process in batches to avoid memory issues
   const duplicateGroups = [];
   let processedCount = 0;
@@ -53,7 +53,7 @@ async function detectDuplicates() {
     },
     // Group by fingerprint - only count first (memory efficient)
     {
-      $group: {
+      // $group: {
         _id: "$fingerprint",
         count: { $sum: 1 },
         // Store minimal data in group stage
@@ -68,7 +68,7 @@ async function detectDuplicates() {
     },
     // Sort by count (for processing priority)
     {
-      $sort: { count: -1 },
+      // $sort: { count: -1 },
     },
   ];
 
@@ -87,7 +87,7 @@ async function detectDuplicates() {
         fileName: { $exists: true, $ne: null, $ne: "" },
         extension: { $exists: true, $ne: null },
         sizeBytes: { $exists: true, $type: "number", $gt: 0 },
-        $expr: {
+        // $expr: {
           $eq: [
             {
               $concat: [
@@ -143,11 +143,11 @@ async function detectDuplicates() {
  * Main function to detect and save duplicates
  * Optimized for 80TB+ datasets with batch inserts
  */
-async function detectAndSaveDuplicates() {
+async // function detectAndSaveDuplicates() {
   const INSERT_BATCH_SIZE = 1000; // Insert in batches to avoid memory issues
 
   // Step 1: Clear old duplicate_files collection
-  await DuplicateFile.deleteMany({});
+  // REMOVED: await DuplicateFile.deleteMany({});
 
   // Step 2: Run aggregation to detect duplicates (cursor-based)
   const duplicateGroups = [];
@@ -178,7 +178,7 @@ async function detectAndSaveDuplicates() {
       },
     },
     {
-      $group: {
+      // $group: {
         _id: "$fingerprint",
         count: { $sum: 1 },
         firstFile: { $first: "$$ROOT" },
@@ -190,7 +190,7 @@ async function detectAndSaveDuplicates() {
       },
     },
     {
-      $sort: { count: -1 },
+      // $sort: { count: -1 },
     },
   ];
 
@@ -208,12 +208,12 @@ async function detectAndSaveDuplicates() {
     const firstFile = group.firstFile;
 
     // Use exact values from first file for efficient indexed lookup
-    // This avoids $expr and can use the compound index
+    // This avoids // $expr and can use the compound index
     const files = await FileMeta.find(
       {
         extension: firstFile.extension,
         sizeBytes: firstFile.sizeBytes,
-        $expr: {
+        // $expr: {
           $eq: [
             { $toLower: { $trim: { input: "$fileName" } } },
             { $toLower: { $trim: { input: firstFile.fileName } } },
@@ -254,7 +254,7 @@ async function detectAndSaveDuplicates() {
 
     // Insert in batches to avoid memory issues
     if (batchBuffer.length >= INSERT_BATCH_SIZE) {
-      await DuplicateFile.insertMany(batchBuffer, { ordered: false });
+      // REMOVED: await DuplicateFile.insertMany(batchBuffer, { ordered: false });
       batchBuffer = [];
     }
 
@@ -268,7 +268,7 @@ async function detectAndSaveDuplicates() {
 
   // Insert remaining items
   if (batchBuffer.length > 0) {
-    await DuplicateFile.insertMany(batchBuffer, { ordered: false });
+    // REMOVED: await DuplicateFile.insertMany(batchBuffer, { ordered: false });
   }
 
   return {
@@ -295,12 +295,12 @@ async function getDuplicates(options = {}) {
     query["files.drive"] = drive;
   }
 
-  const duplicates = await DuplicateFile.find(query)
+  // REMOVED: const duplicates = await DuplicateFile.find(query)
     .sort({ count: -1, detectedAt: -1 })
     .limit(parseInt(limit))
     .skip(parseInt(skip));
 
-  const total = await DuplicateFile.countDocuments(query);
+  // REMOVED: const total = await DuplicateFile.countDocuments(query);
 
   return {
     total,
