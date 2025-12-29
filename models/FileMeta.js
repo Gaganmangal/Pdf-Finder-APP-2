@@ -1,26 +1,11 @@
-const mongoose = require("mongoose");
-
-const FileMetaSchema = new mongoose.Schema(
-  {
-    fileName: String,
-    fullPath: String, // Removed unique constraint to allow duplicates
-    folderPath: String,
-    extension: String,
-    sizeBytes: Number,
-    sizeMB: Number,
-    drive: String,
-    fingerprint: String, // Lightweight fingerprint for duplicate detection: normalizedFileName::extension::sizeBytes
-    fileCreatedAt: Date, // File creation time (from D drive)
-    modifiedAt: Date, // File modification time (from D drive)
-    fileAccessedAt: Date, // File access time (from D drive)
-    scannedAt: Date, // When document was created in MongoDB
-  },
-  { timestamps: false } // Disabled to use file's actual timestamps
-);
-
-// Index for fingerprint (used for duplicate detection during scan)
-FileMetaSchema.index({ fingerprint: 1 });
-
-module.exports = mongoose.model("FileMeta", FileMetaSchema);
-
-module.exports = mongoose.model("FileMeta", FileMetaSchema);
+// MongoDB FileMeta schema for reference only (if you use Mongoose, otherwise not required)
+// Not used by scanner.js directly, but helpful for clarity and validation
+module.exports = {
+  path: String,           // full path at scan time
+  name: String,
+  ext: String,
+  size: Number,
+  modifiedAt: Date,
+  scanTime: Date,         // when this FileMeta was added
+  fingerprint: String,    // name|ext|size
+};

@@ -1,312 +1,59 @@
-const fs = require("fs");
+const fs = require("fs/promises");
 const path = require("path");
-const FileMeta = require("./models/FileMeta");
-const DuplicateFile = require("./models/DuplicateFile");
+const { MongoClient } = require("mongodb");
 
-// Batch sizes for MongoDB operations (optimized for 200k+ files)
-const FILE_BATCH_SIZE = 1000; // Files per batch write
-const DUPLICATE_BATCH_SIZE = 500; // Duplicate groups per batch write
+const MONGO_URI = "YOUR_MONGO_URI";
+const FILE_ROOT = "/mnt/windows_share"; // Update as needed
+const BATCH_SIZE = 1000;
 
-// Global state for single-pass scanning
-let totalFilesScanned = 0;
-let totalDirsScanned = 0;
-let totalDuplicatesFound = 0;
-
-// Batch buffers
-let fileBatchBuffer = [];
-let duplicateBatchBuffer = [];
-
-// In-memory Map to track fingerprints during scan
-// Key: fingerprint, Value: array of file info objects
-// This is memory-efficient because:
-// 1. We only store fingerprints we've seen (not all files)
-// 2. We flush duplicates periodically to MongoDB
-// 3. Map size is bounded by number of unique fingerprints, not total files
-const fingerprintMap = new Map();
-
-/**
- * Generate lightweight fingerprint for duplicate detection
- * Format: normalizedFileName::extension::sizeBytes
- * This avoids expensive aggregation pipelines
- */
-function generateFingerprint(fileName, extension, sizeBytes) {
-  const normalized = (fileName || "").toLowerCase().trim();
-  return `${normalized}::${extension || ""}::${sizeBytes}`;
+function getFingerprint({ name, ext, size }) {
+  return `${name}|${ext}|${size}`;
 }
 
-/**
- * Flush file batch to MongoDB using bulkWrite
- * This is faster than insertMany for large datasets
- */
-async function flushFileBatch() {
-  if (fileBatchBuffer.length === 0) return;
-
-  try {
-    const operations = fileBatchBuffer.map((doc) => ({
-      insertOne: { document: doc },
-    }));
-
-    await FileMeta.bulkWrite(operations, { ordered: false });
-    fileBatchBuffer = [];
-  } catch (err) {
-    fileBatchBuffer = []; // Clear on error to prevent memory issues
+async function* walk(dir) {
+  for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+    const abs = path.join(dir, entry.name);
+    if (entry.isDirectory()) yield* walk(abs);
+    else yield abs;
   }
 }
 
-/**
- * Flush duplicate groups to MongoDB using bulkWrite
- * Only writes groups that have 2+ files (actual duplicates)
- */
-async function flushDuplicateBatch() {
-  if (duplicateBatchBuffer.length === 0) return;
+async function scanAndInsert() {
+  const client = new MongoClient(MONGO_URI);
+  await client.connect();
+  const db = client.db();
+  const FileMeta = db.collection("FileMeta");
+  const scanTime = new Date();
 
-  try {
-    const operations = duplicateBatchBuffer.map((doc) => ({
-      insertOne: { document: doc },
-    }));
+  let batch = [];
+  for await (const filePath of walk(FILE_ROOT)) {
+    const stat = await fs.stat(filePath);
+    const ext = path.extname(filePath);
+    const name = path.basename(filePath, ext);
+    const size = stat.size;
+    const modifiedAt = stat.mtime;
+    const fingerprint = getFingerprint({ name, ext, size });
 
-    await DuplicateFile.bulkWrite(operations, { ordered: false });
-    duplicateBatchBuffer = [];
-  } catch (err) {
-    duplicateBatchBuffer = []; // Clear on error
-  }
-}
+    batch.push({
+      path: filePath,
+      name,
+      ext,
+      size,
+      modifiedAt,
+      scanTime,
+      fingerprint,
+    });
 
-/**
- * Process a duplicate fingerprint and add to batch buffer
- * Called when we encounter a fingerprint for the 2nd+ time
- */
-function processDuplicate(fingerprint, fileInfo, existingFiles) {
-  // If this is the 2nd occurrence, create a new duplicate group
-  if (existingFiles.length === 1) {
-    const firstFile = existingFiles[0];
-    const duplicateGroup = {
-      fingerprint: fingerprint,
-      fileName: firstFile.fileName,
-      extension: firstFile.extension,
-      sizeBytes: firstFile.sizeBytes,
-      count: 2, // Now we have 2 files
-      files: [
-        {
-          fullPath: firstFile.fullPath,
-          folderPath: firstFile.folderPath,
-          drive: firstFile.drive,
-          scannedAt: firstFile.scannedAt,
-        },
-        {
-          fullPath: fileInfo.fullPath,
-          folderPath: fileInfo.folderPath,
-          drive: fileInfo.drive,
-          scannedAt: fileInfo.scannedAt,
-        },
-      ],
-      detectedAt: new Date(),
-    };
-
-    duplicateBatchBuffer.push(duplicateGroup);
-    totalDuplicatesFound += 2; // Count both files
-
-    // Flush if batch is full
-    if (duplicateBatchBuffer.length >= DUPLICATE_BATCH_SIZE) {
-      return flushDuplicateBatch();
-    }
-  } else {
-    // This is 3rd+ occurrence, update existing group in buffer or Map
-    // Find the group in buffer and update it
-    const groupIndex = duplicateBatchBuffer.findIndex(
-      (g) => g.fingerprint === fingerprint
-    );
-
-    if (groupIndex !== -1) {
-      // Update existing group in buffer
-      duplicateBatchBuffer[groupIndex].count++;
-      duplicateBatchBuffer[groupIndex].files.push({
-        fullPath: fileInfo.fullPath,
-        folderPath: fileInfo.folderPath,
-        drive: fileInfo.drive,
-        scannedAt: fileInfo.scannedAt,
-      });
-      totalDuplicatesFound++;
-    } else {
-      // Group was already flushed, we need to update in DB later
-      // For now, just track in Map - will be handled in final flush
-      existingFiles.push(fileInfo);
-    }
-  }
-}
-
-/**
- * Single-pass directory scanner with real-time duplicate detection
- * WHY THIS APPROACH:
- * 1. No aggregation pipelines - avoids MongoDB memory limits
- * 2. Duplicates detected during scan - no second pass needed
- * 3. Memory-efficient Map - only stores fingerprints, not all file data
- * 4. Bulk writes - fast MongoDB operations
- * 5. Scales to 200k+ files without memory issues
- */
-async function scanDirectory(dir, drive = "D") {
-  let items;
-  let fileCount = 0;
-  let dirCount = 0;
-
-  try {
-    items = fs.readdirSync(dir);
-  } catch (err) {
-    return { fileCount: 0, dirCount: 0 };
-  }
-
-  for (const item of items) {
-    const fullPath = path.join(dir, item);
-
-    let stat;
-    try {
-      stat = fs.statSync(fullPath);
-    } catch {
-      continue;
-    }
-
-    if (stat.isDirectory()) {
-      dirCount++;
-      totalDirsScanned++;
-      const result = await scanDirectory(fullPath, drive);
-      fileCount += result.fileCount;
-      dirCount += result.dirCount;
-    } else if (stat.isFile()) {
-      try {
-        // Get file timestamps
-        let fileCreated = stat.birthtime;
-        if (
-          !fileCreated ||
-          fileCreated.getTime() <= 0 ||
-          fileCreated.getTime() > Date.now()
-        ) {
-          fileCreated = stat.ctime;
-        }
-
-        const extension = path.extname(item);
-        const sizeBytes = stat.size;
-        const scannedAt = new Date();
-
-        // Generate fingerprint for duplicate detection
-        const fingerprint = generateFingerprint(item, extension, sizeBytes);
-
-        // Build file metadata (includes fingerprint for indexing)
-        const fileMetadata = {
-          fileName: item,
-          fullPath,
-          folderPath: dir,
-          extension,
-          sizeBytes,
-          sizeMB: +(sizeBytes / (1024 * 1024)).toFixed(2),
-          drive,
-          fingerprint, // Store fingerprint for potential future queries
-          fileCreatedAt: fileCreated,
-          modifiedAt: stat.mtime,
-          fileAccessedAt: stat.atime,
-          scannedAt,
-        };
-
-        // Check for duplicates using in-memory Map
-        // This is O(1) lookup - very fast
-        const fileInfo = {
-          fileName: item,
-          fullPath,
-          folderPath: dir,
-          drive,
-          extension,
-          sizeBytes,
-          scannedAt,
-        };
-
-        if (fingerprintMap.has(fingerprint)) {
-          // DUPLICATE FOUND - process it
-          const existingFiles = fingerprintMap.get(fingerprint);
-          existingFiles.push(fileInfo);
-          fingerprintMap.set(fingerprint, existingFiles);
-
-          // Process duplicate group
-          await processDuplicate(fingerprint, fileInfo, existingFiles);
-        } else {
-          // First occurrence - just track it
-          fingerprintMap.set(fingerprint, [fileInfo]);
-        }
-
-        // Add to file batch buffer (ALL files are saved to FileMeta)
-        fileBatchBuffer.push(fileMetadata);
-        fileCount++;
-        totalFilesScanned++;
-
-        // Flush file batch when full
-        if (fileBatchBuffer.length >= FILE_BATCH_SIZE) {
-          await flushFileBatch();
-        }
-      } catch (err) {
-        continue;
-      }
+    if (batch.length >= BATCH_SIZE) {
+      await FileMeta.insertMany(batch);
+      batch = [];
     }
   }
 
-  return { fileCount, dirCount };
+  if (batch.length) await FileMeta.insertMany(batch);
+
+  console.log("Scan finished at", new Date());
+  await client.close();
 }
 
-/**
- * Main scanning function with duplicate detection
- * Clears old duplicates and performs single-pass scan
- */
-async function scanDirectoryWithStats(dir, drive = "D") {
-  // Reset global state
-  totalFilesScanned = 0;
-  totalDirsScanned = 0;
-  totalDuplicatesFound = 0;
-  fileBatchBuffer = [];
-  duplicateBatchBuffer = [];
-  fingerprintMap.clear();
-
-  // Clear old duplicate records (optional - can be commented out to keep history)
-  await DuplicateFile.deleteMany({});
-
-  // Perform single-pass scan with real-time duplicate detection
-  const result = await scanDirectory(dir, drive);
-
-  // Flush remaining batches
-  await flushFileBatch();
-  await flushDuplicateBatch();
-
-  // Final pass: Process any remaining duplicates in Map that weren't flushed
-  // This handles cases where duplicates were found but groups weren't complete
-  for (const [fingerprint, files] of fingerprintMap.entries()) {
-    if (files.length > 1) {
-      // This is a duplicate group that might not have been written yet
-      // Check if it exists in DB, if not, create it
-      const existingGroup = await DuplicateFile.findOne({ fingerprint });
-      if (!existingGroup) {
-        const duplicateGroup = {
-          fingerprint: fingerprint,
-          fileName: files[0].fileName,
-          extension: files[0].extension,
-          sizeBytes: files[0].sizeBytes,
-          count: files.length,
-          files: files.map((f) => ({
-            fullPath: f.fullPath,
-            folderPath: f.folderPath,
-            drive: f.drive,
-            scannedAt: f.scannedAt,
-          })),
-          detectedAt: new Date(),
-        };
-        await DuplicateFile.create(duplicateGroup);
-        totalDuplicatesFound += files.length;
-      }
-    }
-  }
-
-  return {
-    fileCount: totalFilesScanned,
-    dirCount: totalDirsScanned,
-    duplicateFiles: totalDuplicatesFound,
-    duplicateGroups: await DuplicateFile.countDocuments(),
-  };
-}
-
-// Export the optimized scanner function
-module.exports = scanDirectoryWithStats;
+scanAndInsert().catch(console.error);

@@ -1,0 +1,19 @@
+# FileMeta indexes
+# To be applied in MongoDB shell or Atlas UI
+
+# 1. By fingerprint (for fast duplicate aggregation)
+db.FileMeta.createIndex({ fingerprint: 1 })
+
+# 2. By path and scanTime (for history queries)
+db.FileMeta.createIndex({ path: 1, scanTime: -1 })
+
+# 3. By scanTime (for cleanup and latest scan queries)
+db.FileMeta.createIndex({ scanTime: -1 })
+
+# 4. By modifiedAt (optional, for time-based queries)
+db.FileMeta.createIndex({ modifiedAt: -1 })
+
+# DuplicateFile indexes
+db.DuplicateFile.createIndex({ fingerprint: 1 })
+db.DuplicateFile.createIndex({ detectedAt: -1 })
+
