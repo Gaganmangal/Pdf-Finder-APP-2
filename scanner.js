@@ -2,7 +2,8 @@ const fs = require("fs/promises");
 const path = require("path");
 const { MongoClient } = require("mongodb");
 
-const MONGO_URI = "YOUR_MONGO_URI";
+const MONGO_URI =
+  "mongodb+srv://Gaganfnr:ndLz9yHCsOmv9S3k@gagan.jhuti8y.mongodb.net/test?appName=Gagan";
 const FILE_ROOT = "/mnt/windows_share"; // Update as needed
 const BATCH_SIZE = 1000;
 
