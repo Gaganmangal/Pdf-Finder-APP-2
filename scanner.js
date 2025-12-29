@@ -1,4 +1,13 @@
 const fs = require("fs");
+
+// Helper to normalize file paths (cross-platform, case-insensitive)
+function normalizePath(p) {
+  return (p || "")
+    .replace(/\\/g, "/")
+    .toLowerCase()
+    .replace(/\/+$|^\/+/g, "");
+}
+
 const path = require("path");
 const FileMeta = require("./models/FileMeta");
 const DuplicateFile = require("./models/DuplicateFile");
@@ -296,7 +305,7 @@ async function scanDirectoryWithStats(dir, drive = "D") {
         fileCount += result.fileCount;
         dirCount += result.dirCount;
       } else if (stat.isFile()) {
-        foundPathsSet.add(fullPath);
+        foundPathsSet.add(normalizePath(fullPath));
         try {
           let fileCreated = stat.birthtime;
           if (
@@ -391,7 +400,7 @@ async function scanDirectoryWithStats(dir, drive = "D") {
 
   // Clean up deleted files in database
   const dbAllFiles = await FileMeta.find({}, "fullPath");
-  const pathsInDb = dbAllFiles.map((f) => f.fullPath);
+  const pathsInDb = dbAllFiles.map((f) => normalizePath(f.fullPath));
   const pathsToDelete = pathsInDb.filter((p) => !foundPathsSet.has(p));
   if (pathsToDelete.length > 0) {
     await FileMeta.deleteMany({ fullPath: { $in: pathsToDelete } });
