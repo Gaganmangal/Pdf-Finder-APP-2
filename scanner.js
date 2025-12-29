@@ -43,7 +43,11 @@ async function flushFileBatch() {
 
   try {
     const operations = fileBatchBuffer.map((doc) => ({
-      insertOne: { document: doc },
+      updateOne: {
+        filter: { fullPath: doc.fullPath }, // Use file path as unique key
+        update: { $set: doc },
+        upsert: true,
+      },
     }));
 
     await FileMeta.bulkWrite(operations, { ordered: false });
@@ -254,6 +258,7 @@ async function scanDirectory(dir, drive = "D") {
  * Clears old duplicates and performs single-pass scan
  */
 async function scanDirectoryWithStats(dir, drive = "D") {
+  const foundPathsSet = new Set();
   // Reset global state
   totalFilesScanned = 0;
   totalDirsScanned = 0;
@@ -266,7 +271,91 @@ async function scanDirectoryWithStats(dir, drive = "D") {
   await DuplicateFile.deleteMany({});
 
   // Perform single-pass scan with real-time duplicate detection
-  const result = await scanDirectory(dir, drive);
+  // Wrap scanDirectory to collect all found paths
+  async function scanAndCollect(dir, drive) {
+    let items;
+    try {
+      items = fs.readdirSync(dir);
+    } catch (err) {
+      return { fileCount: 0, dirCount: 0 };
+    }
+    let fileCount = 0;
+    let dirCount = 0;
+    for (const item of items) {
+      const fullPath = path.join(dir, item);
+      let stat;
+      try {
+        stat = fs.statSync(fullPath);
+      } catch {
+        continue;
+      }
+      if (stat.isDirectory()) {
+        dirCount++;
+        totalDirsScanned++;
+        const result = await scanAndCollect(fullPath, drive);
+        fileCount += result.fileCount;
+        dirCount += result.dirCount;
+      } else if (stat.isFile()) {
+        foundPathsSet.add(fullPath);
+        try {
+          let fileCreated = stat.birthtime;
+          if (
+            !fileCreated ||
+            fileCreated.getTime() <= 0 ||
+            fileCreated.getTime() > Date.now()
+          ) {
+            fileCreated = stat.ctime;
+          }
+          const extension = path.extname(item);
+          const sizeBytes = stat.size;
+          const scannedAt = new Date();
+          const fingerprint = generateFingerprint(item, extension, sizeBytes);
+          const fileMetadata = {
+            fileName: item,
+            fullPath,
+            folderPath: dir,
+            extension,
+            sizeBytes,
+            sizeMB: +(sizeBytes / (1024 * 1024)).toFixed(2),
+            drive,
+            fingerprint,
+            fileCreatedAt: fileCreated,
+            modifiedAt: stat.mtime,
+            fileAccessedAt: stat.atime,
+            scannedAt,
+          };
+          const fileInfo = {
+            fileName: item,
+            fullPath,
+            folderPath: dir,
+            drive,
+            extension,
+            sizeBytes,
+            scannedAt,
+          };
+          if (fingerprintMap.has(fingerprint)) {
+            const existingFiles = fingerprintMap.get(fingerprint);
+            existingFiles.push(fileInfo);
+            fingerprintMap.set(fingerprint, existingFiles);
+            await processDuplicate(fingerprint, fileInfo, existingFiles);
+          } else {
+            fingerprintMap.set(fingerprint, [fileInfo]);
+          }
+          fileBatchBuffer.push(fileMetadata);
+          fileCount++;
+          totalFilesScanned++;
+          if (fileBatchBuffer.length >= FILE_BATCH_SIZE) {
+            await flushFileBatch();
+          }
+        } catch (err) {
+          continue;
+        }
+      }
+    }
+    return { fileCount, dirCount };
+  }
+
+  const result = await scanAndCollect(dir, drive);
 
   // Flush remaining batches
   await flushFileBatch();
@@ -298,6 +387,14 @@ async function scanDirectoryWithStats(dir, drive = "D") {
         totalDuplicatesFound += files.length;
       }
     }
+  }
+
+  // Clean up deleted files in database
+  const dbAllFiles = await FileMeta.find({}, "fullPath");
+  const pathsInDb = dbAllFiles.map((f) => f.fullPath);
+  const pathsToDelete = pathsInDb.filter((p) => !foundPathsSet.has(p));
+  if (pathsToDelete.length > 0) {
+    await FileMeta.deleteMany({ fullPath: { $in: pathsToDelete } });
   }
 
   return {
