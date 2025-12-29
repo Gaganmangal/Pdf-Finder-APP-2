@@ -3,9 +3,7 @@ const fs = require("fs");
 const path = require("path");
 
 const connectDB = require("./db");
-const scanDrive = require("./scanner");
-const FileMeta = require("./models/FileMeta");
-
+const scanDrive = require("./scanner.js"); // Updated for new single scan source of truth
 const app = express();
 app.use(express.json());
 
@@ -198,48 +196,9 @@ app.get("/list-folder", async (req, res) => {
 //   }
 // });
 
-app.post("/detect-duplicates", async (req, res) => {
-  const { detectAndSaveDuplicates } = require("./services/detectDuplicates");
-  // 1️⃣ Turant response
-  res.json({
-    message: "Duplicate detection started in background",
-  });
-
-  // 2️⃣ Background execution
-  setImmediate(async () => {
-    try {
-      console.log("🚀 Duplicate detection started...");
-      await detectAndSaveDuplicates();
-      console.log("✅ Duplicate detection finished");
-    } catch (err) {
-      console.error("❌ Duplicate detection failed:", err.message);
-    }
-  });
-});
-
 // =======================================================
 // 6️⃣ GET DUPLICATES
 // =======================================================
-app.get("/duplicates", async (req, res) => {
-  try {
-    const { getDuplicates } = require("./services/detectDuplicates");
-
-    const { limit = 100, skip = 0, minCount = 2, extension, drive } = req.query;
-
-    const result = await getDuplicates({
-      limit: parseInt(limit),
-      skip: parseInt(skip),
-      minCount: parseInt(minCount),
-      extension,
-      drive,
-    });
-
-    res.json(result);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // =======================================================
 // SERVER START
 // =======================================================
