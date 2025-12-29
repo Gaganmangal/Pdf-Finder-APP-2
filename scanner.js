@@ -7,7 +7,10 @@ const FileMeta = require("./models/FileMeta");
 
 const FILE_BATCH_SIZE = 1000;
 
-async function scanDirectoryAndMirror(dir, drive = "NETWORK") {
+// Use only ONE drive string across all scans for consistency
+const DRIVE = "NETWORK";
+
+async function scanDirectoryAndMirror(dir) {
   const scanId = new Date();
   let batch = [];
   let totalFiles = 0;
@@ -60,7 +63,7 @@ async function scanDirectoryAndMirror(dir, drive = "NETWORK") {
           extension: path.extname(item),
           sizeBytes: stat.size,
           sizeMB: +(stat.size / (1024 * 1024)).toFixed(2),
-          drive,
+          drive: DRIVE,
           fileCreatedAt: created,
           modifiedAt: stat.mtime,
           fileAccessedAt: stat.atime,
@@ -74,7 +77,7 @@ async function scanDirectoryAndMirror(dir, drive = "NETWORK") {
 
   await scanDir(dir);
   await flush();
-  await FileMeta.deleteMany({ drive, lastSeenAt: { $ne: scanId } });
+  await FileMeta.deleteMany({ drive: DRIVE, lastSeenAt: { $ne: scanId } });
   return { fileCount: totalFiles, dirCount: totalDirs };
 }
 
