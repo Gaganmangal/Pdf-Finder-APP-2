@@ -1,16 +1,22 @@
-// MongoDB DuplicateFile schema for reference only
-module.exports = {
-  fingerprint: String,
-  count: Number,
-  files: [  // Small batch only; projection limited to key fields
-    {
-      _id: 'ObjectId',
-      path: String,
-      name: String,
-      ext: String,
-      size: Number,
-      modifiedAt: Date,
-    }
-  ],
-  detectedAt: Date,
-};
+const mongoose = require("mongoose");
+
+const DuplicateFileSchema = new mongoose.Schema(
+  {
+    fingerprint: { type: String, index: true },
+    count: Number,
+
+    files: [
+      {
+        fullPath: String,
+        folderPath: String,
+        drive: String,
+        scannedAt: Date,
+      },
+    ],
+
+    detectedAt: { type: Date, default: Date.now },
+  },
+  { timestamps: true }
+);
+
+module.exports = mongoose.model("DuplicateFile", DuplicateFileSchema);
