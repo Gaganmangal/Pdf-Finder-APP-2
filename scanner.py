@@ -1,15 +1,27 @@
 import os
 import pymongo
+import hashlib
 from datetime import datetime, timezone
 
 MONGO_URI = "mongodb+srv://Gaganfnr:ndLz9yHCsOmv9S3k@gagan.jhuti8y.mongodb.net/test?appName=Gagan"
-FILE_ROOT = "/mnt/pdfs"
+FILE_ROOT = "D:/PDF"
 FILEMETA_BATCH_SIZE = 1000
 DUPLICATE_BATCH_SIZE = 500
 
 
 def get_fingerprint(file_name, extension, size_bytes):
     return f"{file_name.lower()}|{extension}|{size_bytes}"
+
+def sha1_hash(val):
+    return hashlib.sha1(val.encode("utf-8")).hexdigest()
+
+def classify_access(last_accessed, now):
+    days = (now - last_accessed).days
+    if days <= 30:
+        return "HOT"
+    elif days <= 180:
+        return "WARM"
+    return "COLD"
 
 def strip_large_fields(doc):
     return {
@@ -25,18 +37,21 @@ def strip_large_fields(doc):
 
 def scan_and_insert():
     client = pymongo.MongoClient(MONGO_URI)
-    # ✅ EXPLICIT database name -- change 'test' if you use another DB name
     db = client["test"]
     filemeta = db["FileMeta"]
     duplicatefile = db["DuplicateFile"]
+    filemetaaccess = db["FileMetaAccess"]
 
-    # clear duplicates each scan
+    # Clear duplicates and FileMetaAccess each scan (optional for FileMetaAccess)
     duplicatefile.delete_many({})
+    # filemetaaccess.delete_many({})            # Uncomment if you want to reset each scan
 
     scan_time = datetime.now(timezone.utc)
     filemeta_batch = []
-    duplicate_map = {}
+    # duplicate_map = {}
     duplicate_batch = []
+    filemetaaccess_batch = []
+    now = scan_time
 
     for dirpath, _, filenames in os.walk(FILE_ROOT):
         for fname in filenames:
@@ -50,6 +65,9 @@ def scan_and_insert():
             extension = os.path.splitext(fname)[1]
             size_bytes = stat.st_size
             fingerprint = get_fingerprint(fname, extension, size_bytes)
+            file_id = sha1_hash(full_path)
+            last_accessed_at = datetime.fromtimestamp(stat.st_atime, tz=timezone.utc)
+            first_accessed_at = last_accessed_at  # If no prior, this is the first
 
             meta_doc = {
                 "fullPath": full_path,
@@ -57,7 +75,7 @@ def scan_and_insert():
                 "extension": extension,
                 "sizeBytes": size_bytes,
                 "modifiedAt": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
-                "fileAccessedAt": datetime.fromtimestamp(stat.st_atime, tz=timezone.utc),
+                "fileAccessedAt": last_accessed_at,
                 "fileCreatedAt": datetime.fromtimestamp(stat.st_ctime, tz=timezone.utc),
                 "scannedAt": scan_time,
                 "fingerprint": fingerprint,
@@ -93,6 +111,28 @@ def scan_and_insert():
                 filemeta.insert_many(filemeta_batch)
                 print(f"Inserted {len(filemeta_batch)} FileMeta docs!")
                 filemeta_batch.clear()
+
+            # ---- FILEMETAACCESS: UPSERT HOT/WARM/COLD ACCESS ----
+            access_category = classify_access(last_accessed_at, now)
+            update_result = filemetaaccess.update_one(
+                {"fileId": file_id},
+                {
+                    "$inc": {"accessCount": 1},
+                    "$setOnInsert": {
+                        "firstAccessedAt": first_accessed_at,
+                        "fullPath": full_path,
+                        "fileName": fname,
+                        "extension": extension,
+                        "sizeBytes": size_bytes,
+                    },
+                    "$set": {
+                        "lastAccessedAt": last_accessed_at,
+                        "accessCategory": access_category,
+                        "updatedAt": now,
+                    },
+                },
+                upsert=True
+            )
 
     if filemeta_batch:
         filemeta.insert_many(filemeta_batch)
