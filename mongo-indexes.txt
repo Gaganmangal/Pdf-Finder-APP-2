@@ -1,19 +1,19 @@
-# FileMeta indexes
-# To be applied in MongoDB shell or Atlas UI
+# Recommended MongoDB Indexes for FAST, SAFE SCALABLE operation
 
-# 1. By fingerprint (for fast duplicate aggregation)
-db.FileMeta.createIndex({ fingerprint: 1 })
+# 1. For FileMetaLatest: maintain one doc per unique file (by fileId, i.e., sha1 of path)
+db.FileMetaLatest.createIndex({ fileId: 1 }, { unique: true })
 
-# 2. By path and scanTime (for history queries)
-db.FileMeta.createIndex({ path: 1, scanTime: -1 })
+# 2. For FileMetaAccess: fast access heat analytics (unique per file, upsert safe)
+db.FileMetaAccess.createIndex({ fileId: 1 }, { unique: true })
 
-# 3. By scanTime (for cleanup and latest scan queries)
-db.FileMeta.createIndex({ scanTime: -1 })
+# 3. For DuplicateIndex: dedup per fingerprint (each fingerprint only once in this col)
+db.DuplicateIndex.createIndex({ fingerprint: 1 }, { unique: true })
 
-# 4. By modifiedAt (optional, for time-based queries)
-db.FileMeta.createIndex({ modifiedAt: -1 })
+# 4. For DuplicateFiles: duplicate groupings (per fingerprint)
+db.DuplicateFiles.createIndex({ fingerprint: 1 }, { unique: true })
 
-# DuplicateFile indexes
-db.DuplicateFile.createIndex({ fingerprint: 1 })
-db.DuplicateFile.createIndex({ detectedAt: -1 })
+# 5. For FileMetaRaw: If you run queries by scanId or fingerprint often, suggest these
+db.FileMetaRaw.createIndex({ scanId: 1 })
+db.FileMetaRaw.createIndex({ fingerprint: 1 })
 
+db.FileSystemTrends.createIndex({ date: 1 })

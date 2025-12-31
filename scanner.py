@@ -2,150 +2,236 @@ import os
 import pymongo
 import hashlib
 from datetime import datetime, timezone
+from pymongo import UpdateOne, InsertOne
+from pymongo.errors import DuplicateKeyError
 
+# ================= CONFIG =================
 MONGO_URI = "mongodb+srv://Gaganfnr:ndLz9yHCsOmv9S3k@gagan.jhuti8y.mongodb.net/test?appName=Gagan"
-FILE_ROOT = "D:/PDF"
-FILEMETA_BATCH_SIZE = 1000
-DUPLICATE_BATCH_SIZE = 500
+ROOT_PATH = "D:/PDF"   # change to /mnt/pdfs on EC2
+BATCH_SIZE = 1000
+CHECKPOINT_EVERY = 5000
+# ==========================================
 
 
-def get_fingerprint(file_name, extension, size_bytes):
-    return f"{file_name.lower()}|{extension}|{size_bytes}"
-
-def sha1_hash(val):
+def sha1(val: str) -> str:
     return hashlib.sha1(val.encode("utf-8")).hexdigest()
+
 
 def classify_access(last_accessed, now):
     days = (now - last_accessed).days
     if days <= 30:
         return "HOT"
-    elif days <= 180:
+    if days <= 180:
         return "WARM"
     return "COLD"
 
-def strip_large_fields(doc):
-    return {
-        "fullPath": doc["fullPath"],
-        "fileName": doc["fileName"],
-        "extension": doc["extension"],
-        "sizeBytes": doc["sizeBytes"],
-        "modifiedAt": doc["modifiedAt"],
-        "scannedAt": doc["scannedAt"],
-        "fileAccessedAt": doc["fileAccessedAt"],
-        "fileCreatedAt": doc["fileCreatedAt"],
+
+def load_checkpoint(db):
+    state = db.ScanState.find_one({"_id": "current_scan"})
+    return state["lastPath"] if state else None
+
+
+def save_checkpoint(db, path, count):
+    db.ScanState.update_one(
+        {"_id": "current_scan"},
+        {"$set": {
+            "lastPath": path,
+            "filesScanned": count,
+            "updatedAt": datetime.now(timezone.utc)
+        }},
+        upsert=True
+    )
+
+
+def scan():
+    client = pymongo.MongoClient(MONGO_URI)
+    db = client.test
+
+    raw = db.FileMetaRaw
+    latest = db.FileMetaLatest
+    access = db.FileMetaAccess
+    trends = db.FileSystemTrends
+    dup_index = db.DuplicateIndex
+    dup_files = db.DuplicateFiles
+
+    # Required indexes (safe if already exist)
+    dup_index.create_index("fingerprint", unique=True)
+    latest.create_index("fileId", unique=True)
+    access.create_index("fileId", unique=True)
+
+    scan_id = sha1(str(datetime.now()))
+    now = datetime.now(timezone.utc)
+    today = now.strftime("%Y-%m-%d")
+
+    resume_from = load_checkpoint(db)
+
+    raw_ops = []
+    latest_ops = []
+    access_ops = []
+
+    counters = {
+        "totalFiles": 0,
+        "totalSizeGB": 0,
+        "HOT": 0,
+        "WARM": 0,
+        "COLD": 0
     }
 
-def scan_and_insert():
-    client = pymongo.MongoClient(MONGO_URI)
-    db = client["test"]
-    filemeta = db["FileMeta"]
-    duplicatefile = db["DuplicateFile"]
-    filemetaaccess = db["FileMetaAccess"]
+    skipped = resume_from is not None
+    scanned = 0
 
-    # Clear duplicates and FileMetaAccess each scan (optional for FileMetaAccess)
-    duplicatefile.delete_many({})
-    # filemetaaccess.delete_many({})            # Uncomment if you want to reset each scan
-
-    scan_time = datetime.now(timezone.utc)
-    filemeta_batch = []
-    # duplicate_map = {}
-    duplicate_batch = []
-    filemetaaccess_batch = []
-    now = scan_time
-
-    for dirpath, _, filenames in os.walk(FILE_ROOT):
-        for fname in filenames:
-            full_path = os.path.join(dirpath, fname)
-            try:
-                stat = os.stat(full_path)
-            except Exception as e:
-                print("Stat error:", full_path, e)
+    for root, _, files in os.walk(ROOT_PATH):
+        if skipped:
+            if root == resume_from:
+                skipped = False
+            else:
                 continue
 
-            extension = os.path.splitext(fname)[1]
-            size_bytes = stat.st_size
-            fingerprint = get_fingerprint(fname, extension, size_bytes)
-            file_id = sha1_hash(full_path)
-            last_accessed_at = datetime.fromtimestamp(stat.st_atime, tz=timezone.utc)
-            first_accessed_at = last_accessed_at  # If no prior, this is the first
+        for name in files:
+            path = os.path.join(root, name)
 
-            meta_doc = {
-                "fullPath": full_path,
-                "fileName": fname,
-                "extension": extension,
-                "sizeBytes": size_bytes,
-                "modifiedAt": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
-                "fileAccessedAt": last_accessed_at,
-                "fileCreatedAt": datetime.fromtimestamp(stat.st_ctime, tz=timezone.utc),
-                "scannedAt": scan_time,
+            try:
+                st = os.stat(path)
+            except Exception:
+                continue
+
+            file_id = sha1(path)
+            ext = os.path.splitext(name)[1]
+            size = st.st_size
+
+            accessed = datetime.fromtimestamp(st.st_atime, tz=timezone.utc)
+            modified = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc)
+            created = datetime.fromtimestamp(st.st_ctime, tz=timezone.utc)
+
+            fingerprint = f"{name.lower()}|{ext}|{size}"
+
+            # ---------- RAW ----------
+            raw_ops.append(InsertOne({
+                "scanId": scan_id,
+                "fullPath": path,
+                "fileName": name,
+                "extension": ext,
+                "sizeBytes": size,
+                "modifiedAt": modified,
+                "accessedAt": accessed,
+                "createdAt": created,
                 "fingerprint": fingerprint,
-            }
+                "scannedAt": now
+            }))
 
-            filemeta_batch.append(meta_doc)
+            # ---------- LATEST ----------
+            latest_ops.append(UpdateOne(
+                {"fileId": file_id},
+                {"$set": {
+                    "fullPath": path,
+                    "fileName": name,
+                    "extension": ext,
+                    "sizeBytes": size,
+                    "modifiedAt": modified,
+                    "accessedAt": accessed,
+                    "createdAt": created,
+                    "fingerprint": fingerprint,
+                    "updatedAt": now
+                }},
+                upsert=True
+            ))
 
-            # ---- DUPLICATE LOGIC ----
-            if fingerprint not in duplicate_map:
-                duplicate_map[fingerprint] = [meta_doc]
-            else:
-                group = duplicate_map[fingerprint]
-                group.append(meta_doc)
-
-                if len(group) == 2:
-                    duplicate_batch.append({
-                        "fingerprint": fingerprint,
-                        "count": 2,
-                        "files": [strip_large_fields(d) for d in group],
-                        "detectedAt": scan_time,
-                    })
-                else:
-                    duplicate_batch[-1]["count"] += 1
-                    duplicate_batch[-1]["files"].append(strip_large_fields(meta_doc))
-
-                if len(duplicate_batch) >= DUPLICATE_BATCH_SIZE:
-                    duplicatefile.insert_many(duplicate_batch)
-                    print(f"Inserted {len(duplicate_batch)} duplicate batches!")
-                    duplicate_batch.clear()
-
-            # ---- FILEMETA BATCH ----
-            if len(filemeta_batch) >= FILEMETA_BATCH_SIZE:
-                filemeta.insert_many(filemeta_batch)
-                print(f"Inserted {len(filemeta_batch)} FileMeta docs!")
-                filemeta_batch.clear()
-
-            # ---- FILEMETAACCESS: UPSERT HOT/WARM/COLD ACCESS ----
-            access_category = classify_access(last_accessed_at, now)
-            update_result = filemetaaccess.update_one(
+            # ---------- ACCESS ----------
+            category = classify_access(accessed, now)
+            access_ops.append(UpdateOne(
                 {"fileId": file_id},
                 {
                     "$inc": {"accessCount": 1},
                     "$setOnInsert": {
-                        "firstAccessedAt": first_accessed_at,
-                        "fullPath": full_path,
-                        "fileName": fname,
-                        "extension": extension,
-                        "sizeBytes": size_bytes,
+                        "fullPath": path,
+                        "firstAccessedAt": accessed
                     },
                     "$set": {
-                        "lastAccessedAt": last_accessed_at,
-                        "accessCategory": access_category,
-                        "updatedAt": now,
-                    },
+                        "lastAccessedAt": accessed,
+                        "accessCategory": category,
+                        "updatedAt": now
+                    }
                 },
                 upsert=True
-            )
+            ))
 
-    if filemeta_batch:
-        filemeta.insert_many(filemeta_batch)
-        print(f"Inserted final {len(filemeta_batch)} FileMeta docs!")
+            # ---------- DUPLICATE DETECTION (NO RAM) ----------
+            try:
+                dup_index.insert_one({
+                    "fingerprint": fingerprint,
+                    "count": 1,
+                    "createdAt": now,
+                    "updatedAt": now
+                })
+            except DuplicateKeyError:
+                # store actual duplicate files
+                dup_files.update_one(
+                    {"fingerprint": fingerprint},
+                    {
+                        "$inc": {"count": 1},
+                        "$set": {"updatedAt": now},
+                        "$push": {
+                            "files": {
+                                "fileId": file_id,
+                                "fullPath": path,
+                                "scannedAt": now
+                            }
+                        }
+                    },
+                    upsert=True
+                )
 
-    if duplicate_batch:
-        duplicatefile.insert_many(duplicate_batch)
-        print(f"Inserted final {len(duplicate_batch)} duplicate batches!")
+                # update index counter
+                dup_index.update_one(
+                    {"fingerprint": fingerprint},
+                    {
+                        "$inc": {"count": 1},
+                        "$set": {"updatedAt": now}
+                    }
+                )
 
-    print("✅ Scan finished at", scan_time)
-    print("👉 Database:", db.name)
-    print("👉 Collections:", db.list_collection_names())
+            # ---------- TRENDS ----------
+            counters["totalFiles"] += 1
+            counters["totalSizeGB"] += size / (1024 ** 3)
+            counters[category] += 1
+
+            scanned += 1
+
+            # ---------- BULK FLUSH ----------
+            if scanned % BATCH_SIZE == 0:
+                raw.bulk_write(raw_ops, ordered=False)
+                latest.bulk_write(latest_ops, ordered=False)
+                access.bulk_write(access_ops, ordered=False)
+                raw_ops.clear()
+                latest_ops.clear()
+                access_ops.clear()
+
+            if scanned % CHECKPOINT_EVERY == 0:
+                save_checkpoint(db, root, scanned)
+
+    # ---------- FINAL FLUSH ----------
+    if raw_ops:
+        raw.bulk_write(raw_ops, ordered=False)
+        latest.bulk_write(latest_ops, ordered=False)
+        access.bulk_write(access_ops, ordered=False)
+
+    # ---------- DAILY TREND ----------
+    trends.update_one(
+        {"date": today},
+        {"$set": {
+            "totalFiles": counters["totalFiles"],
+            "totalSizeGB": round(counters["totalSizeGB"], 2),
+            "hotFiles": counters["HOT"],
+            "warmFiles": counters["WARM"],
+            "coldFiles": counters["COLD"],
+            "updatedAt": now
+        }},
+        upsert=True
+    )
+
+    print(f"✅ Scan completed: {scanned} files")
     client.close()
 
+
 if __name__ == "__main__":
-    scan_and_insert()
+    scan()
