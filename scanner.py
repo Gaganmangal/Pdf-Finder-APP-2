@@ -8,8 +8,8 @@ from pymongo.errors import DuplicateKeyError
 # ================= CONFIG =================
 MONGO_URI = "mongodb+srv://Gaganfnr:ndLz9yHCsOmv9S3k@gagan.jhuti8y.mongodb.net/test?appName=Gagan"
 ROOT_PATH = "/mnt/pdfs"   # change to /mnt/pdfs on EC2
-BATCH_SIZE = 1000
-CHECKPOINT_EVERY = 5000
+BATCH_SIZE = 10000
+CHECKPOINT_EVERY = 50000
 # ==========================================
 
 
@@ -156,62 +156,62 @@ def scan():
             ))
 
             # ---------- DUPLICATE DETECTION (NO RAM) ----------
-            try:
-                dup_index.insert_one({
-                    "fingerprint": fingerprint,
-                    # "count": 1,
-                    # "firstFileId": file_id,
-                    "firstPath": path,
-                    "createdAt": now,
-                    "updatedAt": now
-                })
-            except DuplicateKeyError:
-                idx = dup_index.find_one(
-                    {"fingerprint": fingerprint}, 
-                    {"firstPath": 1}
-                    )
+    #         try:
+    #             dup_index.insert_one({
+    #                 "fingerprint": fingerprint,
+    #                 # "count": 1,
+    #                 # "firstFileId": file_id,
+    #                 "firstPath": path,
+    #                 "createdAt": now,
+    #                 "updatedAt": now
+    #             })
+    #         except DuplicateKeyError:
+    #             idx = dup_index.find_one(
+    #                 {"fingerprint": fingerprint}, 
+    #                 {"firstPath": 1}
+    #                 )
 
-                if not idx:
-                        continue
+    #             if not idx:
+    #                     continue
 
-                if idx["firstPath"] == path:
-                    dup_index.update_one(
-                        {
-                            "fingerprint": fingerprint}, 
-                            {"$set": {"updatedAt": now}
-                        }
-                    )
-                    continue
+    #             if idx["firstPath"] == path:
+    #                 dup_index.update_one(
+    #                     {
+    #                         "fingerprint": fingerprint}, 
+    #                         {"$set": {"updatedAt": now}
+    #                     }
+    #                 )
+    #                 continue
                     
-                dup_files.update_one(
-                {"fingerprint": fingerprint},
-                {
-                    "$setOnInsert": {
-                    "fingerprint": fingerprint,
-                    "createdAt": now,
-                },
-                    "$addToSet": {
-                        "files": {
-                            # # "fileId": file_id, 
-                            # "fullPath": path, 
-                            # "scannedAt": now
-                            "$each": [
-                                idx["firstPath"],
-                                path  
-                            ]
-                        }
-                    },
-                "$set": {
-                    "updatedAt": now
-                    }
-                },
-                upsert=True
-            )
+    #             dup_files.update_one(
+    #             {"fingerprint": fingerprint},
+    #             {
+    #                 "$setOnInsert": {
+    #                 "fingerprint": fingerprint,
+    #                 "createdAt": now,
+    #             },
+    #                 "$addToSet": {
+    #                     "files": {
+    #                         # # "fileId": file_id, 
+    #                         # "fullPath": path, 
+    #                         # "scannedAt": now
+    #                         "$each": [
+    #                             idx["firstPath"],
+    #                             path  
+    #                         ]
+    #                     }
+    #                 },
+    #             "$set": {
+    #                 "updatedAt": now
+    #                 }
+    #             },
+    #             upsert=True
+    #         )
 
-            dup_index.update_one(
-        {"fingerprint": fingerprint},
-        {"$set": {"updatedAt": now}}
-    )
+    #         dup_index.update_one(
+    #     {"fingerprint": fingerprint},
+    #     {"$set": {"updatedAt": now}}
+    # )
 
             # ---------- TRENDS ----------
             counters["totalFiles"] += 1
