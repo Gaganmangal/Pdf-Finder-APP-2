@@ -7,7 +7,7 @@ from pymongo.errors import DuplicateKeyError
 
 # ================= CONFIG =================
 MONGO_URI = "mongodb+srv://Gaganfnr:ndLz9yHCsOmv9S3k@gagan.jhuti8y.mongodb.net/test?appName=Gagan"
-ROOT_PATH = "D:/PDF"   # change to /mnt/pdfs on EC2
+ROOT_PATH = "/mnt/pdfs"   # change to /mnt/pdfs on EC2
 BATCH_SIZE = 1000
 CHECKPOINT_EVERY = 5000
 # ==========================================
