@@ -477,18 +477,228 @@
 #     scan()
 
 
+# import os
+# import hashlib
+# import pymongo
+# from datetime import datetime, timezone
+# from pymongo import UpdateOne, InsertOne
+# from concurrent.futures import ProcessPoolExecutor
+
+# # ================= CONFIG =================
+# MONGO_URI = "mongodb+srv://Gaganfnr:ndLz9yHCsOmv9S3k@gagan.jhuti8y.mongodb.net/test?appName=Gagan"
+# ROOT_PATH = "/mnt/pdfs"
+# BATCH_SIZE = 2000
+# MAX_WORKERS = 4   # Windows + Disk safe
+# # ==========================================
+
+
+# def sha1(val: str) -> str:
+#     return hashlib.sha1(val.encode("utf-8")).hexdigest()
+
+
+# def scan_subfolder(folder_path: str, scan_id: str) -> int:
+#     """One worker scans one top-level folder (FAST, no logic)"""
+#     client = pymongo.MongoClient(MONGO_URI)
+#     db = client.test
+
+#     raw_ops, latest_ops = [], []
+#     local_count = 0
+#     now = datetime.now(timezone.utc)
+
+#     stack = [folder_path]
+
+#     while stack:
+#         current = stack.pop()
+#         try:
+#             with os.scandir(current) as it:
+#                 for entry in it:
+#                     if entry.is_dir(follow_symlinks=False):
+#                         stack.append(entry.path)
+
+#                     elif entry.is_file(follow_symlinks=False):
+#                         st = entry.stat()
+#                         path = entry.path
+
+#                         file_name = entry.name
+#                         extension = os.path.splitext(file_name)[1].lower()
+#                         parent_dir = os.path.dirname(path)
+
+#                         file_id = sha1(path)
+
+#                         # 🔑 Fingerprint for duplicate detection (post-scan)
+#                         fingerprint = f"{file_name.lower()}|{st.st_size}"
+
+#                         # created = datetime.fromtimestamp(st.st_ctime, tz=timezone.utc)
+#                         modified = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc)
+
+#                         # -------- RAW (append only) --------
+#                         raw_ops.append(InsertOne({
+#                             "scanId": scan_id,
+#                             "fileId": file_id,
+#                             "fullPath": path,
+#                             "parentDir": parent_dir,
+#                             "fileName": file_name,
+#                             "extension": extension,
+#                             "sizeBytes": st.st_size,
+#                             "fingerprint": fingerprint,
+#                             # "createdAt": created,
+#                             "modifiedAt": modified,
+#                             "scannedAt": now
+#                         }))
+
+#                         # -------- LATEST (current state) --------
+#                         latest_ops.append(UpdateOne(
+#                             {"fileId": file_id},
+#                             {
+#                                 "$set": {
+#                                     "fullPath": path,
+#                                     "parentDir": parent_dir,
+#                                     "fileName": file_name,
+#                                     "extension": extension,
+#                                     "sizeBytes": st.st_size,
+#                                     "fingerprint": fingerprint,
+#                                     # "createdAt": created,
+#                                     "modifiedAt": modified,
+#                                     "updatedAt": now
+#                                 }
+#                             },
+#                             upsert=True
+#                         ))
+
+#                         local_count += 1
+
+#                         # -------- BULK FLUSH --------
+#                         if len(raw_ops) >= BATCH_SIZE:
+#                             db.FileMetaRaw.bulk_write(raw_ops, ordered=False)
+#                             db.FileMetaLatest.bulk_write(latest_ops, ordered=False)
+#                             raw_ops.clear()
+#                             latest_ops.clear()
+
+#         except (PermissionError, OSError):
+#             continue
+
+#     # -------- FINAL FLUSH --------
+#     if raw_ops:
+#         db.FileMetaRaw.bulk_write(raw_ops, ordered=False)
+#         db.FileMetaLatest.bulk_write(latest_ops, ordered=False)
+
+#     client.close()
+#     return local_count
+
+
+# def main():
+#     print("🚀 Starting FAST parallel scan (no logic)...")
+
+#     scan_id = sha1(str(datetime.now(timezone.utc)))
+
+#     try:
+#         top_folders = [
+#             f.path for f in os.scandir(ROOT_PATH) if f.is_dir()
+#         ]
+#     except Exception as e:
+#         print(f"❌ Cannot read root folder: {e}")
+#         return
+
+#     if not top_folders:
+#         print("⚠️ No subfolders found to scan.")
+#         return
+
+#     total_files = 0
+
+#     with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
+#         results = executor.map(
+#             scan_subfolder,
+#             top_folders,
+#             [scan_id] * len(top_folders)
+#         )
+#         total_files = sum(results)
+
+#     print("✅ Scan completed successfully")
+#     print(f"📦 Total files scanned: {total_files}")
+#     print(f"🆔 Scan ID: {scan_id}")
+
+
+# if __name__ == "__main__":
+#     main()
+
+
+# import os
+# import hashlib
+# import pymongo
+# from datetime import datetime, timezone
+
+# # ================= CONFIG =================
+# MONGO_URI = "mongodb+srv://Gaganfnr:ndLz9yHCsOmv9S3k@gagan.jhuti8y.mongodb.net/test?appName=Gagan"
+# ROOT_PATH = "/mnt/pdfs"
+# # ==========================================
+
+# def sha1(val: str) -> str:
+#     return hashlib.sha1(val.encode("utf-8")).hexdigest()
+
+# def scan():
+#     client = pymongo.MongoClient(MONGO_URI)
+#     db = client.test
+#     latest = db.FileMetaLatest
+
+#     now = datetime.now(timezone.utc)
+#     total = 0
+
+#     stack = [ROOT_PATH]
+
+#     while stack:
+#         current = stack.pop()
+#         try:
+#             with os.scandir(current) as it:
+#                 for entry in it:
+#                     if entry.is_dir(follow_symlinks=False):
+#                         stack.append(entry.path)
+
+#                     elif entry.is_file(follow_symlinks=False):
+#                         st = entry.stat()
+#                         path = entry.path
+
+#                         doc = {
+#                             "fileId": sha1(path),
+#                             "fullPath": path,
+#                             "parentDir": os.path.dirname(path),
+#                             "fileName": entry.name,
+#                             "extension": os.path.splitext(entry.name)[1].lower(),
+#                             "sizeBytes": st.st_size,
+#                             "createdAt": datetime.fromtimestamp(st.st_ctime, tz=timezone.utc),
+#                             "modifiedAt": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc),
+#                             "accessedAt": datetime.fromtimestamp(st.st_atime, tz=timezone.utc),
+#                             "updatedAt": now
+#                         }
+
+#                         latest.update_one(
+#                             {"fileId": doc["fileId"]},
+#                             {"$set": doc},
+#                             upsert=True
+#                         )
+
+#                         total += 1
+
+#         except (PermissionError, OSError):
+#             continue
+
+#     client.close()
+#     print(f"✅ Scan completed. Files indexed: {total}")
+
+# if __name__ == "__main__":
+#     scan()
+
 import os
 import hashlib
 import pymongo
 from datetime import datetime, timezone
-from pymongo import UpdateOne, InsertOne
-from concurrent.futures import ProcessPoolExecutor
+from pymongo import UpdateOne
 
 # ================= CONFIG =================
 MONGO_URI = "mongodb+srv://Gaganfnr:ndLz9yHCsOmv9S3k@gagan.jhuti8y.mongodb.net/test?appName=Gagan"
 ROOT_PATH = "/mnt/pdfs"
-BATCH_SIZE = 2000
-MAX_WORKERS = 4   # Windows + Disk safe
+
+BATCH_SIZE = 5000        # sweet spot for MongoDB
+LOG_EVERY = 100_000      # progress log
 # ==========================================
 
 
@@ -496,127 +706,90 @@ def sha1(val: str) -> str:
     return hashlib.sha1(val.encode("utf-8")).hexdigest()
 
 
-def scan_subfolder(folder_path: str, scan_id: str) -> int:
-    """One worker scans one top-level folder (FAST, no logic)"""
-    client = pymongo.MongoClient(MONGO_URI)
+def scan():
+    client = pymongo.MongoClient(
+        MONGO_URI,
+        maxPoolSize=20,
+        serverSelectionTimeoutMS=5000,
+        socketTimeoutMS=600000,
+    )
+
     db = client.test
+    latest = db.FileMetaLatest
 
-    raw_ops, latest_ops = [], []
-    local_count = 0
+    # MUST index (run once, safe if exists)
+    latest.create_index("fileId", unique=True)
+
     now = datetime.now(timezone.utc)
+    ops = []
+    total = 0
 
-    stack = [folder_path]
+    stack = [ROOT_PATH]
+
+    print("🚀 Starting 80TB scan...")
 
     while stack:
         current = stack.pop()
+
         try:
             with os.scandir(current) as it:
                 for entry in it:
                     if entry.is_dir(follow_symlinks=False):
                         stack.append(entry.path)
+                        continue
 
-                    elif entry.is_file(follow_symlinks=False):
-                        st = entry.stat()
-                        path = entry.path
+                    if not entry.is_file(follow_symlinks=False):
+                        continue
 
-                        file_name = entry.name
-                        extension = os.path.splitext(file_name)[1].lower()
-                        parent_dir = os.path.dirname(path)
+                    st = entry.stat()
+                    path = entry.path
 
-                        file_id = sha1(path)
+                    doc = {
+                        "fileId": sha1(path),
+                        "fullPath": path,
+                        "parentDir": os.path.dirname(path),
+                        "fileName": entry.name,
+                        "extension": os.path.splitext(entry.name)[1].lower(),
+                        "sizeBytes": st.st_size,
+                        "createdAt": datetime.fromtimestamp(st.st_ctime, tz=timezone.utc),
+                        "modifiedAt": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc),
 
-                        # 🔑 Fingerprint for duplicate detection (post-scan)
-                        fingerprint = f"{file_name.lower()}|{st.st_size}"
+                        # 🔑 ACCESS TIME = SCAN TIME (reliable)
+                        "accessedAt": now,
 
-                        # created = datetime.fromtimestamp(st.st_ctime, tz=timezone.utc)
-                        modified = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc)
+                        "updatedAt": now,
+                    }
 
-                        # -------- RAW (append only) --------
-                        raw_ops.append(InsertOne({
-                            "scanId": scan_id,
-                            "fileId": file_id,
-                            "fullPath": path,
-                            "parentDir": parent_dir,
-                            "fileName": file_name,
-                            "extension": extension,
-                            "sizeBytes": st.st_size,
-                            "fingerprint": fingerprint,
-                            # "createdAt": created,
-                            "modifiedAt": modified,
-                            "scannedAt": now
-                        }))
+                    ops.append(
+                        UpdateOne(
+                            {"fileId": doc["fileId"]},
+                            {"$set": doc},
+                            upsert=True,
+                        )
+                    )
 
-                        # -------- LATEST (current state) --------
-                        latest_ops.append(UpdateOne(
-                            {"fileId": file_id},
-                            {
-                                "$set": {
-                                    "fullPath": path,
-                                    "parentDir": parent_dir,
-                                    "fileName": file_name,
-                                    "extension": extension,
-                                    "sizeBytes": st.st_size,
-                                    "fingerprint": fingerprint,
-                                    # "createdAt": created,
-                                    "modifiedAt": modified,
-                                    "updatedAt": now
-                                }
-                            },
-                            upsert=True
-                        ))
+                    total += 1
 
-                        local_count += 1
+                    # ---------- BULK WRITE ----------
+                    if len(ops) >= BATCH_SIZE:
+                        latest.bulk_write(ops, ordered=False)
+                        ops.clear()
 
-                        # -------- BULK FLUSH --------
-                        if len(raw_ops) >= BATCH_SIZE:
-                            db.FileMetaRaw.bulk_write(raw_ops, ordered=False)
-                            db.FileMetaLatest.bulk_write(latest_ops, ordered=False)
-                            raw_ops.clear()
-                            latest_ops.clear()
+                    if total % LOG_EVERY == 0:
+                        print(f"📂 Files scanned: {total:,}")
 
         except (PermissionError, OSError):
             continue
 
-    # -------- FINAL FLUSH --------
-    if raw_ops:
-        db.FileMetaRaw.bulk_write(raw_ops, ordered=False)
-        db.FileMetaLatest.bulk_write(latest_ops, ordered=False)
+    # ---------- FINAL FLUSH ----------
+    if ops:
+        latest.bulk_write(ops, ordered=False)
 
     client.close()
-    return local_count
 
-
-def main():
-    print("🚀 Starting FAST parallel scan (no logic)...")
-
-    scan_id = sha1(str(datetime.now(timezone.utc)))
-
-    try:
-        top_folders = [
-            f.path for f in os.scandir(ROOT_PATH) if f.is_dir()
-        ]
-    except Exception as e:
-        print(f"❌ Cannot read root folder: {e}")
-        return
-
-    if not top_folders:
-        print("⚠️ No subfolders found to scan.")
-        return
-
-    total_files = 0
-
-    with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        results = executor.map(
-            scan_subfolder,
-            top_folders,
-            [scan_id] * len(top_folders)
-        )
-        total_files = sum(results)
-
-    print("✅ Scan completed successfully")
-    print(f"📦 Total files scanned: {total_files}")
-    print(f"🆔 Scan ID: {scan_id}")
+    print("✅ Scan completed")
+    print(f"📦 Total files indexed: {total:,}")
 
 
 if __name__ == "__main__":
-    main()
+    scan()
