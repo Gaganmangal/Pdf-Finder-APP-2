@@ -1,3 +1,4 @@
+################################## Working Code But Slow ##################################
 # import os
 # import pymongo
 # import hashlib
@@ -258,6 +259,9 @@
 
 # if __name__ == "__main__":
 #     scan()
+
+################################## Working Code But Slow ##################################
+
 
 # import os
 # import pymongo
@@ -687,50 +691,153 @@
 # if __name__ == "__main__":
 #     scan()
 
+################################## Working Code For Fast Scan But No logic ##################################
+
+# import os
+# import hashlib
+# import pymongo
+# from datetime import datetime, timezone
+# from pymongo import UpdateOne
+
+# # ================= CONFIG =================
+# MONGO_URI = "mongodb+srv://Gaganfnr:ndLz9yHCsOmv9S3k@gagan.jhuti8y.mongodb.net/test?appName=Gagan"
+# ROOT_PATH = "/mnt/pdfs"
+
+# BATCH_SIZE = 5000        # sweet spot for MongoDB
+# LOG_EVERY = 100_000      # progress log
+# # ==========================================
+
+
+# def sha1(val: str) -> str:
+#     return hashlib.sha1(val.encode("utf-8")).hexdigest()
+
+
+# def scan():
+#     client = pymongo.MongoClient(
+#         MONGO_URI,
+#         maxPoolSize=20,
+#         serverSelectionTimeoutMS=5000,
+#         socketTimeoutMS=600000,
+#     )
+
+#     db = client.test
+#     latest = db.FileMetaLatest
+
+#     # MUST index (run once, safe if exists)
+#     latest.create_index("fileId", unique=True)
+
+#     now = datetime.now(timezone.utc)
+#     ops = []
+#     total = 0
+
+#     stack = [ROOT_PATH]
+
+#     print("🚀 Starting 80TB scan...")
+
+#     while stack:
+#         current = stack.pop()
+
+#         try:
+#             with os.scandir(current) as it:
+#                 for entry in it:
+#                     if entry.is_dir(follow_symlinks=False):
+#                         stack.append(entry.path)
+#                         continue
+
+#                     if not entry.is_file(follow_symlinks=False):
+#                         continue
+
+#                     st = entry.stat()
+#                     path = entry.path
+
+#                     doc = {
+#                         "fileId": sha1(path),
+#                         "fullPath": path,
+#                         "parentDir": os.path.dirname(path),
+#                         "fileName": entry.name,
+#                         "extension": os.path.splitext(entry.name)[1].lower(),
+#                         "sizeBytes": st.st_size,
+#                         "createdAt": datetime.fromtimestamp(st.st_ctime, tz=timezone.utc),
+#                         "modifiedAt": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc),
+
+#                         # 🔑 ACCESS TIME = SCAN TIME (reliable)
+#                         "accessedAt": now,
+
+#                         "updatedAt": now,
+#                     }
+
+#                     ops.append(
+#                         UpdateOne(
+#                             {"fileId": doc["fileId"]},
+#                             {"$set": doc},
+#                             upsert=True,
+#                         )
+#                     )
+
+#                     total += 1
+
+#                     # ---------- BULK WRITE ----------
+#                     if len(ops) >= BATCH_SIZE:
+#                         latest.bulk_write(ops, ordered=False)
+#                         ops.clear()
+
+#                     if total % LOG_EVERY == 0:
+#                         print(f"📂 Files scanned: {total:,}")
+
+#         except (PermissionError, OSError):
+#             continue
+
+#     # ---------- FINAL FLUSH ----------
+#     if ops:
+#         latest.bulk_write(ops, ordered=False)
+
+#     client.close()
+
+#     print("✅ Scan completed")
+#     print(f"📦 Total files indexed: {total:,}")
+
+
+# if __name__ == "__main__":
+#     scan()
+
+################################## Working Code For Fast Scan But No logic ##################################
+
+
+
+
 import os
 import hashlib
 import pymongo
 from datetime import datetime, timezone
 from pymongo import UpdateOne
+from concurrent.futures import ProcessPoolExecutor
 
 # ================= CONFIG =================
-MONGO_URI = "mongodb+srv://Gaganfnr:ndLz9yHCsOmv9S3k@gagan.jhuti8y.mongodb.net/test?appName=Gagan"
+MONGO_URI = "mongodb+srv://Gaganfnr:ndLz9yHCsOmv9S3k@gagan.jhuti8y.mongodb.net/test?appName=Gagan&compressors=zlib&maxPoolSize=50"
 ROOT_PATH = "/mnt/pdfs"
-
-BATCH_SIZE = 5000        # sweet spot for MongoDB
-LOG_EVERY = 100_000      # progress log
+BATCH_SIZE = 5000  
+MAX_WORKERS = 8    # Jitne aapke CPU cores hain (Ubuntu par 'nproc' se check karein)
 # ==========================================
-
 
 def sha1(val: str) -> str:
     return hashlib.sha1(val.encode("utf-8")).hexdigest()
 
-
-def scan():
-    client = pymongo.MongoClient(
-        MONGO_URI,
-        maxPoolSize=20,
-        serverSelectionTimeoutMS=5000,
-        socketTimeoutMS=600000,
-    )
-
+def scan_branch(folder_path):
+    """Har worker ek sub-folder ko scan karega"""
+    client = pymongo.MongoClient(MONGO_URI)
     db = client.test
     latest = db.FileMetaLatest
-
-    # MUST index (run once, safe if exists)
+    
+    # 80TB scale par Index check yahan zaruri hai
     latest.create_index("fileId", unique=True)
 
-    now = datetime.now(timezone.utc)
     ops = []
-    total = 0
-
-    stack = [ROOT_PATH]
-
-    print("🚀 Starting 80TB scan...")
+    local_count = 0
+    now = datetime.now(timezone.utc)
+    stack = [folder_path]
 
     while stack:
         current = stack.pop()
-
         try:
             with os.scandir(current) as it:
                 for entry in it:
@@ -738,58 +845,71 @@ def scan():
                         stack.append(entry.path)
                         continue
 
-                    if not entry.is_file(follow_symlinks=False):
-                        continue
+                    if entry.is_file(follow_symlinks=False):
+                        st = entry.stat()
+                        path = entry.path
+                        f_id = sha1(path)
 
-                    st = entry.stat()
-                    path = entry.path
+                        # Compact document structure for high speed
+                        doc = {
+                            "fileId": f_id,
+                            "fullPath": path,
+                            "fileName": entry.name,
+                            "sizeBytes": st.st_size,
+                            "modifiedAt": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc),
+                            "updatedAt": now,
+                            "accessCount": {"$inc": 1}, # Pattern tracking integrated
+                            "lastAccessedAt": now
+                        }
 
-                    doc = {
-                        "fileId": sha1(path),
-                        "fullPath": path,
-                        "parentDir": os.path.dirname(path),
-                        "fileName": entry.name,
-                        "extension": os.path.splitext(entry.name)[1].lower(),
-                        "sizeBytes": st.st_size,
-                        "createdAt": datetime.fromtimestamp(st.st_ctime, tz=timezone.utc),
-                        "modifiedAt": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc),
+                        # Hum UpdateOne use kar rahe hain with $set and $inc
+                        ops.append(UpdateOne(
+                            {"fileId": f_id},
+                            {
+                                "$set": {
+                                    "fullPath": path,
+                                    "fileName": entry.name,
+                                    "sizeBytes": st.st_size,
+                                    "modifiedAt": doc["modifiedAt"],
+                                    "updatedAt": now,
+                                    "lastAccessedAt": now
+                                },
+                                "$inc": {"accessCount": 1},
+                                "$setOnInsert": {"firstSeenAt": now}
+                            },
+                            upsert=True
+                        ))
 
-                        # 🔑 ACCESS TIME = SCAN TIME (reliable)
-                        "accessedAt": now,
-
-                        "updatedAt": now,
-                    }
-
-                    ops.append(
-                        UpdateOne(
-                            {"fileId": doc["fileId"]},
-                            {"$set": doc},
-                            upsert=True,
-                        )
-                    )
-
-                    total += 1
-
-                    # ---------- BULK WRITE ----------
-                    if len(ops) >= BATCH_SIZE:
-                        latest.bulk_write(ops, ordered=False)
-                        ops.clear()
-
-                    if total % LOG_EVERY == 0:
-                        print(f"📂 Files scanned: {total:,}")
+                        local_count += 1
+                        if len(ops) >= BATCH_SIZE:
+                            latest.bulk_write(ops, ordered=False)
+                            ops.clear()
 
         except (PermissionError, OSError):
             continue
 
-    # ---------- FINAL FLUSH ----------
     if ops:
         latest.bulk_write(ops, ordered=False)
-
+    
     client.close()
+    return local_count
 
-    print("✅ Scan completed")
-    print(f"📦 Total files indexed: {total:,}")
+def main():
+    print(f"🚀 Starting Multi-Core Turbo Scan...")
+    
+    # Root ke top-level folders ko list karein taaki workers ko kaam baant sakein
+    try:
+        branches = [f.path for f in os.scandir(ROOT_PATH) if f.is_dir()]
+        if not branches: branches = [ROOT_PATH] # Agar koi subfolder nahi hai
+    except Exception as e:
+        print(f"Error: {e}"); return
 
+    total_files = 0
+    with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        results = list(executor.map(scan_branch, branches))
+        total_files = sum(results)
+
+    print(f"✅ Completed. Total: {total_files:,} files indexed.")
 
 if __name__ == "__main__":
-    scan()
+    main()
