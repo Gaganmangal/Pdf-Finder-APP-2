@@ -1438,7 +1438,7 @@ from concurrent.futures import ProcessPoolExecutor
 
 # ================= CONFIG =================
 MONGO_URI = "mongodb+srv://Gaganfnr:ndLz9yHCsOmv9S3k@gagan.jhuti8y.mongodb.net/test?appName=Gagan&compressors=zlib&maxPoolSize=50"
-ROOT_PATH = "/mnt/pdfs"
+ROOT_PATH = "D:/PDF"
 BATCH_SIZE = 5000
 MAX_WORKERS = 8 
 # ==========================================
@@ -1641,12 +1641,79 @@ def run_file_access_pattern(db):
     db.FileMetaLatest.aggregate(pipeline, allowDiskUse=True)
     print("✅ FileMetaAccess (user-centric) updated successfully.")
 
+#---------- Global Cleanup ----------
+def run_global_cleanup(db, scan_start_time, dry_run=True):
+    """
+    Deletes records of files that were NOT seen in this scan
+    from ALL related collections.
+
+    dry_run=True  -> sirf counts show karega
+    dry_run=False -> actual delete karega (DANGEROUS)
+    """
+
+    print("🧹 Running GLOBAL cleanup across all collections...")
+
+    # 1️⃣ Find stale files from FileMetaLatest
+    stale_cursor = db.FileMetaLatest.find(
+        {"updatedAt": {"$lt": scan_start_time}},
+        {"fileId": 1, "fullPath": 1, "fingerprint": 1}
+    )
+
+    stale = list(stale_cursor)
+    if not stale:
+        print("✅ No stale files found. Cleanup skipped.")
+        return 0
+
+    file_ids = [d["fileId"] for d in stale]
+    paths = [d["fullPath"] for d in stale]
+    fingerprints = [d["fingerprint"] for d in stale if "fingerprint" in d]
+
+    print(f"⚠️ Found {len(file_ids):,} stale files.")
+
+    if dry_run:
+        print("🔎 DRY RUN counts:")
+        print(" FileMetaLatest   :", len(file_ids))
+        print(" FileMetaAccess   :", db.FileMetaAccess.count_documents({"fileId": {"$in": file_ids}}))
+        print(" DuplicateFiles   :", db.DuplicateFiles.count_documents({"files.fullPath": {"$in": paths}}))
+        return len(file_ids)
+
+    # 2️⃣ REAL DELETE (use carefully)
+    r1 = db.FileMetaLatest.delete_many({"fileId": {"$in": file_ids}})
+    r2 = db.FileMetaAccess.delete_many({"fileId": {"$in": file_ids}})
+
+    # DuplicateFiles cleanup (partial update)
+    db.DuplicateFiles.update_many(
+        {},
+        {"$pull": {"files": {"fullPath": {"$in": paths}}}},
+    )
+    # 2️⃣ Recalculate count = files.length (aggregation update)
+    db.DuplicateFiles.update_many(
+    {},
+    [
+        {
+            "$set": {
+                "count": { "$size": "$files" }
+            }
+        }
+    ]
+    )
+
+    # 3️⃣ Remove invalid duplicate groups (count < 2)
+    db.DuplicateFiles.delete_many({ "count": { "$lt": 2 } })
+
+    print("✅ Cleanup completed:")
+    print(f" FileMetaLatest deleted : {r1.deleted_count}")
+    print(f" FileMetaAccess deleted : {r2.deleted_count}")
+    print(f" DuplicateFiles cleaned : paths removed")
+
+    return r1.deleted_count
 
 
 # ---------- MAIN ----------
 def main():
     print(f"🚀 Starting fast scan on {ROOT_PATH}...")
     start_time = datetime.now()
+    scan_start_time = datetime.now(timezone.utc)
 
     # Setup Indices BEFORE starting workers
     client = pymongo.MongoClient(MONGO_URI)
@@ -1671,6 +1738,9 @@ def main():
     run_duplicate_detection(client.test)
     # NEW: Access pattern generation
     run_file_access_pattern(client.test)
+    # Always DRY RUN first
+    # run_global_cleanup(client.test, scan_start_time, dry_run=True)
+    run_global_cleanup(client.test, scan_start_time, dry_run=False)
     client.close()
 
     duration = datetime.now() - start_time
