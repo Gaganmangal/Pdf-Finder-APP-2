@@ -2263,7 +2263,7 @@ def main():
     db.FileMetaLatest.create_index("fileId", unique=True)
     db.FileMetaLatest.create_index("fingerprint")
     db.FileMetaLatest.create_index("fullPath")
-    db.FileMetaLatest.createIndex({ "fingerprint": 1, "fullPath": 1 })
+    db.FileMetaLatest.create_index({ "fingerprint": 1, "fullPath": 1 })
     client.close()
 
     try:
