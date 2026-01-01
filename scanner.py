@@ -1250,35 +1250,31 @@
 import os
 import hashlib
 import pymongo
-import time
 from datetime import datetime, timezone
 from pymongo import UpdateOne
 from concurrent.futures import ProcessPoolExecutor
 
 # ================= CONFIG =================
-MONGO_URI = "mongodb+srv://Gaganfnr:ndLz9yHCsOmv9S3k@gagan.jhuti8y.mongodb.net/test?appName=Gagan&compressors=zlib&maxPoolSize=100"
-ROOT_PATH = "/mnt/pdfs" 
-BATCH_SIZE = 10000   
-MAX_WORKERS = 8      
+MONGO_URI = "mongodb+srv://Gaganfnr:ndLz9yHCsOmv9S3k@gagan.jhuti8y.mongodb.net/test?appName=Gagan&compressors=zlib&maxPoolSize=50"
+ROOT_PATH = "/mnt/pdfs"
+BATCH_SIZE = 5000
+MAX_WORKERS = 8
 # ==========================================
 
 def sha1(val: str) -> str:
     return hashlib.sha1(val.encode("utf-8")).hexdigest()
 
+# ---------- SCAN WORKER ----------
 def scan_branch(folder_path):
     client = pymongo.MongoClient(MONGO_URI)
     db = client.test
-    col_latest = db.FileMetaLatest
-    
-    # 1. LOCAL CACHE for Incremental Sync
-    cursor = col_latest.find(
-        {"fullPath": {"$regex": f"^{folder_path}"}}, 
-        {"fullPath": 1, "modifiedAt": 1, "sizeBytes": 1}
-    )
-    db_cache = {doc['fullPath']: (doc['modifiedAt'], doc.get('sizeBytes', 0)) for doc in cursor}
+    latest = db.FileMetaLatest
 
-    ops_latest = []
-    local_count, skipped_count = 0, 0
+    latest.create_index("fileId", unique=True)
+    latest.create_index("fingerprint")
+
+    ops = []
+    local_count = 0
     now = datetime.now(timezone.utc)
     stack = [folder_path]
 
@@ -1294,108 +1290,110 @@ def scan_branch(folder_path):
                     if entry.is_file(follow_symlinks=False):
                         st = entry.stat()
                         path = entry.path
-                        mtime = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc)
-                        size = st.st_size
-                        
-                        # SKIP if unchanged
-                        if path in db_cache:
-                            cached_mtime, cached_size = db_cache[path]
-                            if cached_mtime == mtime and cached_size == size:
-                                skipped_count += 1
-                                continue
+                        file_id = sha1(path)
 
-                        f_name = entry.name
-                        fingerprint = f"{f_name.lower()}|{size}"
-                        f_id = sha1(path)
+                        fingerprint = f"{entry.name.lower()}|{st.st_size}"
 
-                        ops_latest.append(UpdateOne(
-                            {"fileId": f_id},
-                            {"$set": {
-                                "fullPath": path, "fileName": f_name,
-                                "sizeBytes": size, "fingerprint": fingerprint,
-                                "modifiedAt": mtime, "updatedAt": now
-                            }},
+                        ops.append(UpdateOne(
+                            {"fileId": file_id},
+                            {
+                                "$set": {
+                                    "fileId": file_id,
+                                    "fullPath": path,
+                                    "fileName": entry.name,
+                                    "sizeBytes": st.st_size,
+                                    "fingerprint": fingerprint,
+                                    "modifiedAt": datetime.fromtimestamp(
+                                        st.st_mtime, tz=timezone.utc
+                                    ),
+                                    "updatedAt": now
+                                },
+                                "$setOnInsert": {"firstSeenAt": now}
+                            },
                             upsert=True
                         ))
 
                         local_count += 1
-                        if len(ops_latest) >= BATCH_SIZE:
-                            col_latest.bulk_write(ops_latest, ordered=False)
-                            ops_latest.clear()
+
+                        if len(ops) >= BATCH_SIZE:
+                            latest.bulk_write(ops, ordered=False)
+                            ops.clear()
+
         except (PermissionError, OSError):
             continue
 
-    if ops_latest: col_latest.bulk_write(ops_latest, ordered=False)
-    client.close()
-    return local_count, skipped_count
+    if ops:
+        latest.bulk_write(ops, ordered=False)
 
-def run_auto_duplicate_finder(db):
-    """Scan ke baad ye function automatically duplicates ki list banayega"""
-    print("\n🔍 Scan complete. Finding duplicates automatically...")
-    
-    # 80TB data ke liye aggregation pipeline
+    client.close()
+    return local_count
+
+
+# ---------- DUPLICATE DETECTION ----------
+def run_duplicate_detection(db):
+    print("🔍 Finding duplicates...")
+
     pipeline = [
         {
             "$group": {
                 "_id": "$fingerprint",
                 "count": {"$sum": 1},
-                "filePaths": {"$push": "$fullPath"},
-                "totalSizeBytes": {"$sum": "$sizeBytes"}
+                "files": {
+                    "$push": {
+                        "fullPath": "$fullPath",
+                        "sizeBytes": "$sizeBytes"
+                    }
+                }
+            }
+        },
+        {"$match": {"count": {"$gt": 1}}},
+        {
+            "$project": {
+                "_id": 0,
+                "fingerprint": "$_id",
+                "count": 1,
+                "files": 1,
+                "detectedAt": datetime.now(timezone.utc)
             }
         },
         {
-            "$match": {
-                "count": {"$gt": 1} # Sirf wo fingerprints jinki 1 se zyada copy hai
+            "$merge": {
+                "into": "DuplicateFiles",
+                "whenMatched": "replace",
+                "whenNotMatched": "insert"
             }
-        },
-        {
-            "$sort": {"totalSizeBytes": -1} # Sabse bade duplicates pehle dikhenge
-        },
-        {
-            "$out": "DuplicateFiles_Final" # Nayi collection mein result save hoga
         }
     ]
-    
-    start_dup = time.time()
-    # allowDiskUse is mandatory for millions of records
+
     db.FileMetaLatest.aggregate(pipeline, allowDiskUse=True)
-    print(f"✅ Duplicate detection finished in {int(time.time() - start_dup)}s.")
-    print("📂 Results saved in collection: 'DuplicateFiles_Final'")
+    print("✅ Duplicate detection completed")
 
+
+# ---------- MAIN ----------
 def main():
-    start_time = time.time()
-    print(f"🚀 Incremental Scan + Auto Duplicate Finder Started...")
-    
-    main_client = pymongo.MongoClient(MONGO_URI)
-    db = main_client.test
-
-    # 1. Pre-Indexing (Zaroori for speed)
-    db.FileMetaLatest.create_index("fingerprint")
-    db.FileMetaLatest.create_index("fullPath")
+    print("🚀 Starting fast scan...")
 
     try:
         branches = [f.path for f in os.scandir(ROOT_PATH) if f.is_dir()]
-        if not branches: branches = [ROOT_PATH]
+        if not branches:
+            branches = [ROOT_PATH]
     except Exception as e:
-        print(f"❌ Error: {e}"); return
+        print(f"❌ Error reading root: {e}")
+        return
 
-    # 2. RUN PARALLEL SCAN
     with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        results = list(executor.map(scan_branch, branches))
-        
-    total_new = sum(r[0] for r in results)
-    total_skipped = sum(r[1] for r in results)
+        total_files = sum(executor.map(scan_branch, branches))
 
-    # 3. RUN AUTOMATIC DUPLICATE FINDER
-    run_auto_duplicate_finder(db)
+    print(f"✅ Scan done. Files indexed: {total_files:,}")
 
-    duration = time.time() - start_time
-    print(f"\n" + "="*40)
-    print(f"🏁 TOTAL PROCESS FINISHED")
-    print(f"📦 New/Updated: {total_new:,} | Skipped: {total_skipped:,}")
-    print(f"⏱️ Total Execution Time: {int(duration)} seconds")
-    print("="*40)
-    main_client.close()
+    # Run duplicate detection AFTER scan
+    client = pymongo.MongoClient(MONGO_URI)
+    db = client.test
+    run_duplicate_detection(db)
+    client.close()
+
+    print("🏁 All tasks completed.")
+
 
 if __name__ == "__main__":
     main()
