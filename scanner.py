@@ -1951,20 +1951,23 @@ def scan_branch(folder_path):
 
 # ---------- DUPLICATE DETECTION ----------
 def run_duplicate_detection(db):
-    print("🔍 Aggregating duplicates (Memory Efficient Mode)...")
+    print("🔍 Aggregating duplicates (SAFE + SCALABLE)...")
 
     pipeline = [
-        # Step 1: Filter only necessary fields immediately to reduce document size
-        {"$project": {"fingerprint": 1, "fullPath": 1, "sizeBytes": 1}},
-        
-        # Step 2: Sort by fingerprint (Requires index for performance)
-        {"$sort": {"fingerprint": 1}}, 
-        
-        # Step 3: Group duplicates
+        # 1️⃣ Project only required fields
+        {
+            "$project": {
+                "fingerprint": 1,
+                "fullPath": 1,
+                "sizeBytes": 1
+            }
+        },
+
+        # 2️⃣ Group by fingerprint (NO SORT)
         {
             "$group": {
                 "_id": "$fingerprint",
-                "count": {"$sum": 1},
+                "count": { "$sum": 1 },
                 "files": {
                     "$push": {
                         "fullPath": "$fullPath",
@@ -1973,10 +1976,11 @@ def run_duplicate_detection(db):
                 }
             }
         },
-        # Filter only actual duplicates
-        {"$match": {"count": {"$gt": 1}}},
-        
-        # Step 4: Final formatting
+
+        # 3️⃣ Keep only duplicates
+        { "$match": { "count": { "$gt": 1 } } },
+
+        # 4️⃣ Final shape
         {
             "$project": {
                 "_id": 0,
@@ -1986,7 +1990,8 @@ def run_duplicate_detection(db):
                 "detectedAt": datetime.now(timezone.utc)
             }
         },
-        # Step 5: Save results
+
+        # 5️⃣ Save
         {
             "$merge": {
                 "into": "DuplicateFiles",
@@ -1997,7 +2002,8 @@ def run_duplicate_detection(db):
     ]
 
     db.FileMetaLatest.aggregate(pipeline, allowDiskUse=True)
-    print("✅ Duplicate detection completed.")
+    print("✅ Duplicate detection completed safely.")
+
 
 #---------- File Access Pattern ----------
 def run_file_access_pattern(db):
@@ -2257,6 +2263,7 @@ def main():
     db.FileMetaLatest.create_index("fileId", unique=True)
     db.FileMetaLatest.create_index("fingerprint")
     db.FileMetaLatest.create_index("fullPath")
+    db.FileMetaLatest.createIndex({ "fingerprint": 1, "fullPath": 1 })
     client.close()
 
     try:
