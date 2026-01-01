@@ -2327,3 +2327,4 @@ def main():
     print(f"📦 Total files indexed: {total_files:,}")
 
 if __name__ == "__main__":
+    main()
