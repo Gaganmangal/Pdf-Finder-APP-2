@@ -1525,7 +1525,7 @@ def run_duplicate_detection(db):
         {"$match": {"count": {"$gt": 1}}},
         {
             "$project": {
-                "_id": 0,
+                "_id": "$_id",
                 "fingerprint": "$_id",
                 "count": 1,
                 "files": 1,
