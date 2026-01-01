@@ -1708,7 +1708,123 @@ def run_global_cleanup(db, scan_start_time, dry_run=True):
 
     return r1.deleted_count
 
+#---------- Trend Daily Summary ----------
+def build_trend_daily_summary(db, scan_start_time, scan_end_time):
+    now = datetime.now(timezone.utc)
+    date_key = now.strftime("%Y-%m-%d")
 
+    total_files = db.FileMetaLatest.count_documents({})
+    total_size = db.FileMetaLatest.aggregate([
+        {"$group": {"_id": None, "size": {"$sum": "$sizeBytes"}}}
+    ]).next()["size"]
+
+    access_stats = list(db.FileMetaAccess.aggregate([
+        {
+            "$group": {
+                "_id": "$accessClass",
+                "count": {"$sum": 1}
+            }
+        }
+    ]))
+
+    access_map = {x["_id"]: x["count"] for x in access_stats}
+
+    duplicate_groups = db.DuplicateFiles.count_documents({})
+    duplicate_files = db.DuplicateFiles.aggregate([
+        {"$unwind": "$files"},
+        {"$count": "count"}
+    ]).next()["count"] if duplicate_groups else 0
+
+    db.TrendDailySummary.update_one(
+        {"_id": date_key},
+        {"$set": {
+            "date": date_key,
+            "totalFiles": total_files,
+            "totalSizeBytes": total_size,
+
+            "hotFiles": access_map.get("HOT", 0),
+            "warmFiles": access_map.get("WARM", 0),
+            "coldFiles": access_map.get("COLD", 0),
+
+            "duplicateGroups": duplicate_groups,
+            "duplicateFiles": duplicate_files,
+
+            "scanDurationSec": int((scan_end_time - scan_start_time).total_seconds()),
+            "createdAt": now
+        }},
+        upsert=True
+    )
+
+#---------- Trend Folder Heatmap ----------
+def build_folder_heatmap(db):
+    pipeline = [
+        {
+            # Split fullPath into array by "/"
+            "$addFields": {
+                "pathParts": { "$split": ["$fullPath", "/"] }
+            }
+        },
+        {
+            # Remove last element (file name)
+            "$addFields": {
+                "folder": {
+                    "$reduce": {
+                        "input": {
+                            "$slice": [
+                                "$pathParts",
+                                0,
+                                { "$subtract": [ { "$size": "$pathParts" }, 1 ] }
+                            ]
+                        },
+                        "initialValue": "",
+                        "in": {
+                            "$cond": [
+                                { "$eq": ["$$value", ""] },
+                                "$$this",
+                                { "$concat": ["$$value", "/", "$$this"] }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "$group": {
+                "_id": "$folder",
+                "totalFiles": { "$sum": 1 },
+                "hotFiles": {
+                    "$sum": { "$cond": [{ "$eq": ["$accessClass", "HOT"] }, 1, 0] }
+                },
+                "warmFiles": {
+                    "$sum": { "$cond": [{ "$eq": ["$accessClass", "WARM"] }, 1, 0] }
+                },
+                "coldFiles": {
+                    "$sum": { "$cond": [{ "$eq": ["$accessClass", "COLD"] }, 1, 0] }
+                }
+            }
+        },
+        {
+            "$project": {
+                "_id": "$_id",
+                "folder": "$_id",
+                "totalFiles": 1,
+                "hotFiles": 1,
+                "warmFiles": 1,
+                "coldFiles": 1,
+                "updatedAt": datetime.now(timezone.utc)
+            }
+        },
+        {
+            "$merge": {
+                "into": "TrendFolderHeatmap",
+                "whenMatched": "replace",
+                "whenNotMatched": "insert"
+            }
+        }
+    ]
+
+    db.FileMetaAccess.aggregate(pipeline, allowDiskUse=True)
+    print("✅ TrendFolderHeatmap updated successfully.")
 # ---------- MAIN ----------
 def main():
     print(f"🚀 Starting fast scan on {ROOT_PATH}...")
@@ -1733,14 +1849,18 @@ def main():
     with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
         total_files = sum(executor.map(scan_branch, branches))
 
-    # Duplicate detection process
     client = pymongo.MongoClient(MONGO_URI)
+    # Duplicate detection process
     run_duplicate_detection(client.test)
     # NEW: Access pattern generation
     run_file_access_pattern(client.test)
     # Always DRY RUN first
     # run_global_cleanup(client.test, scan_start_time, dry_run=True)
     run_global_cleanup(client.test, scan_start_time, dry_run=False)
+    # 🔹 BUILD TRENDS (AFTER EVERYTHING)
+    scan_end_time = datetime.now(timezone.utc)
+    build_trend_daily_summary(client.test, scan_start_time, scan_end_time)
+    build_folder_heatmap(client.test)
     client.close()
 
     duration = datetime.now() - start_time
