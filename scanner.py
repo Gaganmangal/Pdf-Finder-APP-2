@@ -1247,6 +1247,188 @@
 
 
 
+# import os
+# import hashlib
+# import pymongo
+# from datetime import datetime, timezone
+# from pymongo import UpdateOne
+# from concurrent.futures import ProcessPoolExecutor
+
+# # ================= CONFIG =================
+# MONGO_URI = "mongodb+srv://Gaganfnr:ndLz9yHCsOmv9S3k@gagan.jhuti8y.mongodb.net/test?appName=Gagan&compressors=zlib&maxPoolSize=50"
+# ROOT_PATH = "/mnt/pdfs"
+# BATCH_SIZE = 5000
+# MAX_WORKERS = 8
+# # ==========================================
+
+# def sha1(val: str) -> str:
+#     return hashlib.sha1(val.encode("utf-8")).hexdigest()
+
+# # ---------- SCAN WORKER ----------
+# def scan_branch(folder_path):
+#     client = pymongo.MongoClient(MONGO_URI)
+#     db = client.test
+#     latest = db.FileMetaLatest
+
+#     latest.create_index("fileId", unique=True)
+#     latest.create_index("fingerprint")
+
+#     ops = []
+#     local_count = 0
+#     now = datetime.now(timezone.utc)
+#     stack = [folder_path]
+
+#     while stack:
+#         current = stack.pop()
+#         try:
+#             with os.scandir(current) as it:
+#                 for entry in it:
+#                     if entry.is_dir(follow_symlinks=False):
+#                         stack.append(entry.path)
+#                         continue
+
+#                     if entry.is_file(follow_symlinks=False):
+#                         st = entry.stat()
+#                         path = entry.path
+#                         file_id = sha1(path)
+
+#                         fingerprint = f"{entry.name.lower()}|{st.st_size}"
+
+#                         ops.append(UpdateOne(
+#                             {"fileId": file_id},
+#                             {
+#                                 "$set": {
+#                                     "fileId": file_id,
+#                                     "fullPath": path,
+#                                     "fileName": entry.name,
+#                                     "sizeBytes": st.st_size,
+#                                     "fingerprint": fingerprint,
+#                                     "filemodifiedAt": datetime.fromtimestamp(
+#                                         st.st_mtime, tz=timezone.utc
+#                                     ),
+#                                     "fileaccessedAt": datetime.fromtimestamp(
+#                                         st.st_atime, tz=timezone.utc
+#                                     ),
+#                                     "updatedAt": now
+#                                 },
+#                                 "$setOnInsert": {"firstSeenAt": now}
+#                             },
+#                             upsert=True
+#                         ))
+
+#                         local_count += 1
+
+#                         if len(ops) >= BATCH_SIZE:
+#                             latest.bulk_write(ops, ordered=False)
+#                             ops.clear()
+
+#         except (PermissionError, OSError):
+#             continue
+
+#     if ops:
+#         latest.bulk_write(ops, ordered=False)
+
+#     client.close()
+#     return local_count
+
+
+# # ---------- DUPLICATE DETECTION ----------
+# def run_duplicate_detection(db):
+#     print("🔍 Finding duplicates...")
+
+#     pipeline = [
+#         {
+#             "$group": {
+#                 "_id": "$fingerprint",
+#                 "count": {"$sum": 1},
+#                 "files": {
+#                     "$push": {
+#                         "fullPath": "$fullPath",
+#                         "sizeBytes": "$sizeBytes"
+#                     }
+#                 }
+#             }
+#         },
+#         {"$match": {"count": {"$gt": 1}}},
+#         {
+#             "$project": {
+#                 "_id": "$_id",
+#                 "fingerprint": "$_id",
+#                 "count": 1,
+#                 "files": 1,
+#                 "detectedAt": datetime.now(timezone.utc)
+#             }
+#         },
+#         {
+#             "$merge": {
+#                 "into": "DuplicateFiles",
+#                 "whenMatched": "replace",
+#                 "whenNotMatched": "insert"
+#             }
+#         }
+#     ]
+
+#     db.FileMetaLatest.aggregate(pipeline, allowDiskUse=True)
+#     print("✅ Duplicate detection completed")
+
+
+# # ---------- MAIN ----------
+# def main():
+#     print("🚀 Starting fast scan...")
+
+#     try:
+#         branches = [f.path for f in os.scandir(ROOT_PATH) if f.is_dir()]
+#         if not branches:
+#             branches = [ROOT_PATH]
+#     except Exception as e:
+#         print(f"❌ Error reading root: {e}")
+#         return
+
+#     with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
+#         total_files = sum(executor.map(scan_branch, branches))
+
+#     print(f"✅ Scan done. Files indexed: {total_files:,}")
+
+#     # Run duplicate detection AFTER scan
+#     client = pymongo.MongoClient(MONGO_URI)
+#     db = client.test
+#     run_duplicate_detection(db)
+#     client.close()
+
+#     print("🏁 All tasks completed.")
+
+
+# if __name__ == "__main__":
+#     main()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 import os
 import hashlib
 import pymongo
@@ -1258,7 +1440,7 @@ from concurrent.futures import ProcessPoolExecutor
 MONGO_URI = "mongodb+srv://Gaganfnr:ndLz9yHCsOmv9S3k@gagan.jhuti8y.mongodb.net/test?appName=Gagan&compressors=zlib&maxPoolSize=50"
 ROOT_PATH = "/mnt/pdfs"
 BATCH_SIZE = 5000
-MAX_WORKERS = 8
+MAX_WORKERS = 8 
 # ==========================================
 
 def sha1(val: str) -> str:
@@ -1269,9 +1451,6 @@ def scan_branch(folder_path):
     client = pymongo.MongoClient(MONGO_URI)
     db = client.test
     latest = db.FileMetaLatest
-
-    latest.create_index("fileId", unique=True)
-    latest.create_index("fingerprint")
 
     ops = []
     local_count = 0
@@ -1291,22 +1470,18 @@ def scan_branch(folder_path):
                         st = entry.stat()
                         path = entry.path
                         file_id = sha1(path)
-
                         fingerprint = f"{entry.name.lower()}|{st.st_size}"
 
                         ops.append(UpdateOne(
                             {"fileId": file_id},
                             {
                                 "$set": {
-                                    "fileId": file_id,
                                     "fullPath": path,
                                     "fileName": entry.name,
                                     "sizeBytes": st.st_size,
                                     "fingerprint": fingerprint,
-                                    "modifiedAt": datetime.fromtimestamp(
-                                        st.st_mtime, tz=timezone.utc
-                                    ),
-                                    "accessCount": datetime.fromtimestamp(st.st_atime, tz=timezone.utc),
+                                    "modifiedAt": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc),
+                                    "lastAccessedAt": datetime.fromtimestamp(st.st_atime, tz=timezone.utc),
                                     "updatedAt": now
                                 },
                                 "$setOnInsert": {"firstSeenAt": now}
@@ -1315,7 +1490,6 @@ def scan_branch(folder_path):
                         ))
 
                         local_count += 1
-
                         if len(ops) >= BATCH_SIZE:
                             latest.bulk_write(ops, ordered=False)
                             ops.clear()
@@ -1329,12 +1503,13 @@ def scan_branch(folder_path):
     client.close()
     return local_count
 
-
 # ---------- DUPLICATE DETECTION ----------
 def run_duplicate_detection(db):
-    print("🔍 Finding duplicates...")
+    print("🔍 Aggregating duplicates (this may take time)...")
 
     pipeline = [
+        # Optimize: Sirf zaruri data memory mein lein
+        {"$project": {"fingerprint": 1, "fullPath": 1, "sizeBytes": 1}},
         {
             "$group": {
                 "_id": "$fingerprint",
@@ -1350,7 +1525,7 @@ def run_duplicate_detection(db):
         {"$match": {"count": {"$gt": 1}}},
         {
             "$project": {
-                "_id": "$_id",
+                "_id": 0,
                 "fingerprint": "$_id",
                 "count": 1,
                 "files": 1,
@@ -1367,12 +1542,19 @@ def run_duplicate_detection(db):
     ]
 
     db.FileMetaLatest.aggregate(pipeline, allowDiskUse=True)
-    print("✅ Duplicate detection completed")
-
+    print("✅ Duplicate detection completed. Data in 'DuplicateFiles' collection.")
 
 # ---------- MAIN ----------
 def main():
-    print("🚀 Starting fast scan...")
+    print(f"🚀 Starting fast scan on {ROOT_PATH}...")
+    start_time = datetime.now()
+
+    # Setup Indices BEFORE starting workers
+    client = pymongo.MongoClient(MONGO_URI)
+    db = client.test
+    db.FileMetaLatest.create_index("fileId", unique=True)
+    db.FileMetaLatest.create_index("fingerprint")
+    client.close()
 
     try:
         branches = [f.path for f in os.scandir(ROOT_PATH) if f.is_dir()]
@@ -1385,16 +1567,14 @@ def main():
     with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
         total_files = sum(executor.map(scan_branch, branches))
 
-    print(f"✅ Scan done. Files indexed: {total_files:,}")
-
-    # Run duplicate detection AFTER scan
+    # Duplicate detection process
     client = pymongo.MongoClient(MONGO_URI)
-    db = client.test
-    run_duplicate_detection(db)
+    run_duplicate_detection(client.test)
     client.close()
 
-    print("🏁 All tasks completed.")
-
+    duration = datetime.now() - start_time
+    print(f"\n✅ All tasks completed in {duration}")
+    print(f"📦 Total files indexed: {total_files:,}")
 
 if __name__ == "__main__":
     main()
