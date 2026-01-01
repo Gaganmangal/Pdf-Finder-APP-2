@@ -1079,7 +1079,7 @@ from concurrent.futures import ProcessPoolExecutor
 
 # ================= CONFIG =================
 MONGO_URI = "mongodb+srv://Gaganfnr:ndLz9yHCsOmv9S3k@gagan.jhuti8y.mongodb.net/test?appName=Gagan&compressors=zlib&maxPoolSize=100"
-ROOT_PATH = "D:/PDF"
+ROOT_PATH = "/mnt/pdfs"
 BATCH_SIZE = 3000   # Optimized for network/disk balance
 MAX_WORKERS = 8     # Match with 'nproc' output
 # ==========================================
