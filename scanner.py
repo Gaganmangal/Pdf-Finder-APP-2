@@ -1544,6 +1544,105 @@ def run_duplicate_detection(db):
     db.FileMetaLatest.aggregate(pipeline, allowDiskUse=True)
     print("✅ Duplicate detection completed. Data in 'DuplicateFiles' collection.")
 
+#---------- File Access Pattern ----------
+def run_file_access_pattern(db):
+    print("📊 Building FileMetaAccess (USER-centric access pattern)...")
+
+    now = datetime.now(timezone.utc)
+
+    pipeline = [
+        # 1️⃣ Pick required fields from FileMetaLatest
+        {
+            "$project": {
+                "fileId": 1,
+                "fullPath": 1,
+                "firstSeenAt": 1,
+                "lastScanAt": "$updatedAt",
+                "osAccessedAt": "$lastAccessedAt"
+            }
+        },
+
+        # 2️⃣ Handle missing / null osAccessedAt
+        # If OS access not available, fallback to firstSeenAt
+        {
+            "$addFields": {
+                "effectiveUserAccessAt": {
+                    "$cond": [
+                        {"$ifNull": ["$osAccessedAt", False]},
+                        "$osAccessedAt",
+                        "$firstSeenAt"
+                    ]
+                }
+            }
+        },
+
+        # 3️⃣ Calculate days since USER last access
+        {
+            "$addFields": {
+                "daysSinceUserAccess": {
+                    "$divide": [
+                        {"$subtract": [now, "$effectiveUserAccessAt"]},
+                        1000 * 60 * 60 * 24
+                    ]
+                }
+            }
+        },
+
+        # 4️⃣ Classify based on USER freshness
+        {
+            "$addFields": {
+                "accessClass": {
+                    "$switch": {
+                        "branches": [
+                            {
+                                "case": {"$lte": ["$daysSinceUserAccess", 7]},
+                                "then": "HOT"
+                            },
+                            {
+                                "case": {"$lte": ["$daysSinceUserAccess", 30]},
+                                "then": "WARM"
+                            }
+                        ],
+                        "default": "COLD"
+                    }
+                }
+            }
+        },
+
+        # 5️⃣ Final shape for FileMetaAccess
+        {
+            "$project": {
+                "_id": "$fileId",
+                "fileId": 1,
+                "fullPath": 1,
+
+                "firstSeenAt": 1,
+                "lastScanAt": 1,
+
+                "osAccessedAt": 1,
+                "effectiveUserAccessAt": 1,
+                "daysSinceUserAccess": 1,
+
+                "accessClass": 1,
+                "updatedAt": now
+            }
+        },
+
+        # 6️⃣ Upsert into FileMetaAccess
+        {
+            "$merge": {
+                "into": "FileMetaAccess",
+                "whenMatched": "replace",
+                "whenNotMatched": "insert"
+            }
+        }
+    ]
+
+    db.FileMetaLatest.aggregate(pipeline, allowDiskUse=True)
+    print("✅ FileMetaAccess (user-centric) updated successfully.")
+
+
+
 # ---------- MAIN ----------
 def main():
     print(f"🚀 Starting fast scan on {ROOT_PATH}...")
@@ -1570,6 +1669,8 @@ def main():
     # Duplicate detection process
     client = pymongo.MongoClient(MONGO_URI)
     run_duplicate_detection(client.test)
+    # NEW: Access pattern generation
+    run_file_access_pattern(client.test)
     client.close()
 
     duration = datetime.now() - start_time
