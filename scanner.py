@@ -1306,6 +1306,7 @@ def scan_branch(folder_path):
                                     "modifiedAt": datetime.fromtimestamp(
                                         st.st_mtime, tz=timezone.utc
                                     ),
+                                    "accessCount": datetime.fromtimestamp(st.st_atime, tz=timezone.utc),
                                     "updatedAt": now
                                 },
                                 "$setOnInsert": {"firstSeenAt": now}
