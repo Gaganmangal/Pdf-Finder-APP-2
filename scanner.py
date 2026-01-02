@@ -1884,7 +1884,7 @@ from concurrent.futures import ProcessPoolExecutor
 
 # ================= CONFIG =================
 MONGO_URI = "mongodb+srv://Gaganfnr:ndLz9yHCsOmv9S3k@gagan.jhuti8y.mongodb.net/test?appName=Gagan&compressors=zlib&maxPoolSize=50"
-ROOT_PATH = "/mnt/pdfs"
+ROOT_PATH = "D:/PDF"
 BATCH_SIZE = 5000
 MAX_WORKERS = 8 
 # ==========================================
