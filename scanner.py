@@ -2018,6 +2018,9 @@ def run_file_access_pattern(db):
                 "fileId": 1,
                 "fullPath": 1,
                 "firstSeenAt": 1,
+                "fileName": 1,          # ✅ added
+                "sizeBytes": 1,         # ✅ added
+                "modifiedAt": 1,
                 "lastScanAt": "$updatedAt",
                 "osAccessedAt": "$lastAccessedAt"
             }
@@ -2079,6 +2082,11 @@ def run_file_access_pattern(db):
 
                 "firstSeenAt": 1,
                 "lastScanAt": 1,
+               
+                "fullPath": 1,
+                "fileName": 1,          # ✅ stored
+                "sizeBytes": 1,         # ✅ stored
+                "modifiedAt": 1, 
 
                 "osAccessedAt": 1,
                 "effectiveUserAccessAt": 1,
