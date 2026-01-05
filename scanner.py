@@ -1884,7 +1884,7 @@ from concurrent.futures import ProcessPoolExecutor
 
 # ================= CONFIG =================
 MONGO_URI = "mongodb+srv://Gaganfnr:ndLz9yHCsOmv9S3k@gagan.jhuti8y.mongodb.net/test?appName=Gagan&compressors=zlib&maxPoolSize=50"
-ROOT_PATH = "/mnt/pdfs"
+ROOT_PATH = "D:/PDF"
 BATCH_SIZE = 5000
 MAX_WORKERS = 8 
 # ==========================================
@@ -2009,7 +2009,7 @@ def run_duplicate_detection(db):
 def run_file_access_pattern(db):
     print("📊 Building FileMetaAccess (USER-centric access pattern)...")
 
-    now = datetime.now(timezone.utc)
+    # now = datetime.now(timezone.utc)
 
     pipeline = [
         # 1️⃣ Pick required fields from FileMetaLatest
@@ -2032,7 +2032,7 @@ def run_file_access_pattern(db):
             "$addFields": {
                 "effectiveUserAccessAt": {
                     "$cond": [
-                        {"$ifNull": ["$osAccessedAt", False]},
+                        {"$ne": ["$osAccessedAt", None]},
                         "$osAccessedAt",
                         "$firstSeenAt"
                     ]
@@ -2044,10 +2044,12 @@ def run_file_access_pattern(db):
         {
             "$addFields": {
                 "daysSinceUserAccess": {
+                    "$floor": {
                     "$divide": [
-                        {"$subtract": [now, "$effectiveUserAccessAt"]},
-                        1000 * 60 * 60 * 24
+                        {"$subtract": ["$$NOW", "$effectiveUserAccessAt"]},
+                        86400000
                     ]
+                }
                 }
             }
         },
@@ -2093,7 +2095,7 @@ def run_file_access_pattern(db):
                 "daysSinceUserAccess": 1,
 
                 "accessClass": 1,
-                "updatedAt": now
+                "updatedAt": "$$NOW"
             }
         },
 
