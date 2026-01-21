@@ -2056,29 +2056,29 @@ def run_file_access_pattern(db):
 
         # 4️⃣ Classify based on USER freshness
         {
-    "$addFields": {
-    "accessClass": {
-        "$switch": {
-        "branches": [
-            {
-            "case": { "$lte": ["$daysSinceUserAccess", 30] },
-            "then": "HOT"
-            },
-            {
-            "case": {
-                "$and": [
-                { "$gt": ["$daysSinceUserAccess", 30] },
-                { "$lte": ["$daysSinceUserAccess", 90] }
-                ]
-            },
-            "then": "WARM"
+            "$addFields": {
+                "accessClass": {
+                    "$switch": {
+                        "branches": [
+                            {
+                                "case": {"$lte": ["$daysSinceUserAccess", 30]},
+                                "then": "HOT"
+                            },
+                            {
+                                "case": {
+                                    "$and": [
+                                        { "$gt": ["$daysSinceUserAccess", 30] },
+                                        { "$lte": ["$daysSinceUserAccess", 90] }
+                                    ]
+                                },
+                                "then": "WARM"
+                            },
+                        ],
+                        "default": "COLD"
+                    }
+                }
             }
-        ],
-        "default": "COLD"
-        }
-    }
-    }
-}
+        },
 
 
         # 5️⃣ Final shape for FileMetaAccess
