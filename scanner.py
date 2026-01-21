@@ -2056,24 +2056,30 @@ def run_file_access_pattern(db):
 
         # 4️⃣ Classify based on USER freshness
         {
-            "$addFields": {
-                "accessClass": {
-                    "$switch": {
-                        "branches": [
-                            {
-                                "case": {"$lte": ["$daysSinceUserAccess", 7]},
-                                "then": "HOT"
-                            },
-                            {
-                                "case": {"$lte": ["$daysSinceUserAccess", 30]},
-                                "then": "WARM"
-                            }
-                        ],
-                        "default": "COLD"
-                    }
-                }
+    "$addFields": {
+    "accessClass": {
+        "$switch": {
+        "branches": [
+            {
+            "case": { "$lte": ["$daysSinceUserAccess", 30] },
+            "then": "HOT"
+            },
+            {
+            "case": {
+                "$and": [
+                { "$gt": ["$daysSinceUserAccess", 30] },
+                { "$lte": ["$daysSinceUserAccess", 90] }
+                ]
+            },
+            "then": "WARM"
             }
-        },
+        ],
+        "default": "COLD"
+        }
+    }
+    }
+}
+
 
         # 5️⃣ Final shape for FileMetaAccess
         {
@@ -2084,7 +2090,7 @@ def run_file_access_pattern(db):
 
                 "firstSeenAt": 1,
                 "lastScanAt": 1,
-               
+        
                 "fullPath": 1,
                 "fileName": 1,          # ✅ stored
                 "sizeBytes": 1,         # ✅ stored
