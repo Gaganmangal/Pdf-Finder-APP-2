@@ -1883,7 +1883,7 @@ from pymongo import UpdateOne
 from concurrent.futures import ProcessPoolExecutor
 
 # ================= CONFIG =================
-MONGO_URI = "mongodb+srv://Gaganfnr:ndLz9yHCsOmv9S3k@gagan.jhuti8y.mongodb.net/test?appName=Gagan&compressors=zlib&maxPoolSize=50"
+MONGO_URI = "mongodb://scannerUser:StrongPassword123@localhost:27017/fileScanner?authSource=admin"
 ROOT_PATH = "/mnt/pdfs"
 BATCH_SIZE = 5000
 MAX_WORKERS = 8 
