@@ -1449,7 +1449,7 @@ def sha1(val: str) -> str:
 # ---------- SCAN WORKER ----------
 def scan_branch(folder_path):
     client = pymongo.MongoClient(MONGO_URI)
-    db = client.test
+    db = client.fileScanner
     latest = db.FileMetaLatest
 
     ops = []
@@ -1833,7 +1833,7 @@ def main():
 
     # Setup Indices BEFORE starting workers
     client = pymongo.MongoClient(MONGO_URI)
-    db = client.test
+    db = client.fileScanner
     db.FileMetaLatest.create_index("fileId", unique=True)
     db.FileMetaLatest.create_index("fingerprint")
     client.close()
@@ -1851,16 +1851,16 @@ def main():
 
     client = pymongo.MongoClient(MONGO_URI)
     # Duplicate detection process
-    run_duplicate_detection(client.test)
+    run_duplicate_detection(client.fileScanner)
     # NEW: Access pattern generation
-    run_file_access_pattern(client.test)
+    run_file_access_pattern(client.fileScanner)
     # Always DRY RUN first
-    # run_global_cleanup(client.test, scan_start_time, dry_run=True)
-    run_global_cleanup(client.test, scan_start_time, dry_run=False)
+    # run_global_cleanup(client.fileScanner, scan_start_time, dry_run=True)
+    run_global_cleanup(client.fileScanner, scan_start_time, dry_run=False)
     # 🔹 BUILD TRENDS (AFTER EVERYTHING)
     scan_end_time = datetime.now(timezone.utc)
-    build_trend_daily_summary(client.test, scan_start_time, scan_end_time)
-    build_folder_heatmap(client.test)
+    build_trend_daily_summary(client.fileScanner, scan_start_time, scan_end_time)
+    build_folder_heatmap(client.fileScanner)
     client.close()
 
     duration = datetime.now() - start_time
