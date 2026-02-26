@@ -74,7 +74,7 @@ def scan_branch(folder_path):
 
 # ---------- DUPLICATE DETECTION ----------
 def run_duplicate_detection(db):
-    print("🔍 Aggregating duplicates (SAFE + SCALABLE)...")
+    print("Aggregating duplicates (SAFE + SCALABLE)...")
 
     pipeline = [
         # 1️⃣ Project only required fields
@@ -125,12 +125,12 @@ def run_duplicate_detection(db):
     ]
 
     db.FileMetaLatest.aggregate(pipeline, allowDiskUse=True)
-    print("✅ Duplicate detection completed safely.")
+    print("Duplicate detection completed safely.")
 
 
 #---------- File Access Pattern ----------
 def run_file_access_pattern(db):
-    print("📊 Building FileMetaAccess (USER-centric access pattern)...")
+    print("Building FileMetaAccess (USER-centric access pattern)...")
 
     # now = datetime.now(timezone.utc)
 
@@ -239,7 +239,7 @@ def run_file_access_pattern(db):
     ]
 
     db.FileMetaLatest.aggregate(pipeline, allowDiskUse=True)
-    print("✅ FileMetaAccess (user-centric) updated successfully.")
+    print("FileMetaAccess (user-centric) updated successfully.")
 
 #---------- Global Cleanup ----------
 def run_global_cleanup(db, scan_start_time, dry_run=True):
@@ -251,7 +251,7 @@ def run_global_cleanup(db, scan_start_time, dry_run=True):
     dry_run=False -> actual delete karega (DANGEROUS)
     """
 
-    print("🧹 Running GLOBAL cleanup across all collections...")
+    print("Running GLOBAL cleanup across all collections...")
 
     # 1️⃣ Find stale files from FileMetaLatest
     stale_cursor = db.FileMetaLatest.find(
@@ -261,17 +261,17 @@ def run_global_cleanup(db, scan_start_time, dry_run=True):
 
     stale = list(stale_cursor)
     if not stale:
-        print("✅ No stale files found. Cleanup skipped.")
+        print("No stale files found. Cleanup skipped.")
         return 0
 
     file_ids = [d["fileId"] for d in stale]
     paths = [d["fullPath"] for d in stale]
     fingerprints = [d["fingerprint"] for d in stale if "fingerprint" in d]
 
-    print(f"⚠️ Found {len(file_ids):,} stale files.")
+    print(f"Found {len(file_ids):,} stale files.")
 
     if dry_run:
-        print("🔎 DRY RUN counts:")
+        print("DRY RUN counts:")
         print(" FileMetaLatest   :", len(file_ids))
         print(" FileMetaAccess   :", db.FileMetaAccess.count_documents({"fileId": {"$in": file_ids}}))
         print(" DuplicateFiles   :", db.DuplicateFiles.count_documents({"files.fullPath": {"$in": paths}}))
@@ -301,7 +301,7 @@ def run_global_cleanup(db, scan_start_time, dry_run=True):
     # 3️⃣ Remove invalid duplicate groups (count < 2)
     db.DuplicateFiles.delete_many({ "count": { "$lt": 2 } })
 
-    print("✅ Cleanup completed:")
+    print("Cleanup completed:")
     print(f" FileMetaLatest deleted : {r1.deleted_count}")
     print(f" FileMetaAccess deleted : {r2.deleted_count}")
     print(f" DuplicateFiles cleaned : paths removed")
@@ -343,19 +343,6 @@ def build_trend_daily_summary(db, scan_start_time, scan_end_time):
 
     duplicate_files = dup_count_result[0]["total"] if dup_count_result else 0
 
-    # Total duplicate storage size
-    dup_size_result = list(db.DuplicateFiles.aggregate([
-        {"$unwind": "$files"},
-        {
-            "$group": {
-                "_id": None,
-                "totalSize": {"$sum": "$files.sizeBytes"}
-            }
-        }
-    ]))
-
-    duplicate_total_size = dup_size_result[0]["totalSize"] if dup_size_result else 0
-
     # Wasted storage size
     wasted_result = list(db.DuplicateFiles.aggregate([
         {
@@ -391,8 +378,7 @@ def build_trend_daily_summary(db, scan_start_time, scan_end_time):
 
             "duplicateGroups": duplicate_groups,
             "duplicateFiles": duplicate_files,
-            "duplicateTotalSizeBytes": duplicate_total_size,
-            "duplicateWastedBytes": duplicate_wasted_size,
+            "TotalDuplicateSize": duplicate_wasted_size,
 
             "scanDurationSec": int((scan_end_time - scan_start_time).total_seconds()),
             "createdAt": now
@@ -437,7 +423,7 @@ def build_trend_daily_summary(db, scan_start_time, scan_end_time):
 #     db.FileMetaAccess.aggregate(pipeline, allowDiskUse=True)
 # ---------- MAIN ----------
 def main():
-    print(f"🚀 Starting fast scan on {ROOT_PATH}...")
+    print(f"Starting fast scan on {ROOT_PATH}...")
     start_time = datetime.now()
     scan_start_time = datetime.now(timezone.utc)
 
@@ -455,7 +441,7 @@ def main():
         if not branches:
             branches = [ROOT_PATH]
     except Exception as e:
-        print(f"❌ Error reading root: {e}")
+        print(f"Error reading root: {e}")
         return
 
     with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
@@ -476,8 +462,8 @@ def main():
     client.close()
 
     duration = datetime.now() - start_time
-    print(f"\n✅ All tasks completed in {duration}")
-    print(f"📦 Total files indexed: {total_files:,}")
+    print(f"\nAll tasks completed in {duration}")
+    print(f"Total files indexed: {total_files:,}")
 
 if __name__ == "__main__":
     main()
