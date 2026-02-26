@@ -2207,10 +2207,53 @@ def build_trend_daily_summary(db, scan_start_time, scan_end_time):
     access_map = {x["_id"]: x["count"] for x in access_stats}
 
     duplicate_groups = db.DuplicateFiles.count_documents({})
-    duplicate_files = db.DuplicateFiles.aggregate([
+
+    # Total duplicate files count (sum of counts)
+    dup_count_result = list(db.DuplicateFiles.aggregate([
+        {
+            "$group": {
+                "_id": None,
+                "total": {"$sum": "$count"}
+            }
+        }
+    ]))
+
+    duplicate_files = dup_count_result[0]["total"] if dup_count_result else 0
+
+    # Total duplicate storage size
+    dup_size_result = list(db.DuplicateFiles.aggregate([
         {"$unwind": "$files"},
-        {"$count": "count"}
-    ]).next()["count"] if duplicate_groups else 0
+        {
+            "$group": {
+                "_id": None,
+                "totalSize": {"$sum": "$files.sizeBytes"}
+            }
+        }
+    ]))
+
+    duplicate_total_size = dup_size_result[0]["totalSize"] if dup_size_result else 0
+
+    # Wasted storage size
+    wasted_result = list(db.DuplicateFiles.aggregate([
+        {
+            "$project": {
+                "wastedBytes": {
+                    "$multiply": [
+                        {"$subtract": ["$count", 1]},
+                        {"$arrayElemAt": ["$files.sizeBytes", 0]}
+                    ]
+                }
+            }
+        },
+        {
+            "$group": {
+                "_id": None,
+                "totalWasted": {"$sum": "$wastedBytes"}
+            }
+        }
+    ]))
+
+    duplicate_wasted_size = wasted_result[0]["totalWasted"] if wasted_result else 0
 
     db.TrendDailySummary.update_one(
         {"_id": date_key},
@@ -2225,6 +2268,8 @@ def build_trend_daily_summary(db, scan_start_time, scan_end_time):
 
             "duplicateGroups": duplicate_groups,
             "duplicateFiles": duplicate_files,
+            "duplicateTotalSizeBytes": duplicate_total_size,
+            "duplicateWastedBytes": duplicate_wasted_size,
 
             "scanDurationSec": int((scan_end_time - scan_start_time).total_seconds()),
             "createdAt": now
