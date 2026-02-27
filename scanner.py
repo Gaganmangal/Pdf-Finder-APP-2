@@ -7,7 +7,7 @@ from concurrent.futures import ProcessPoolExecutor
 
 # ================= CONFIG =================
 MONGO_URI = "mongodb://scannerUser:StrongPassword123@localhost:27017/fileScanner?authSource=admin"
-ROOT_PATH = "/mnt/backup"
+ROOT_PATH = "/mnt/pdfs"
 BATCH_SIZE = 5000
 MAX_WORKERS = 8 
 # ==========================================
