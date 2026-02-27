@@ -454,7 +454,7 @@ def main():
     run_file_access_pattern(client.fileScanner)
     # Always DRY RUN first
     # run_global_cleanup(client.fileScanner, scan_start_time, dry_run=True)
-    run_global_cleanup(client.fileScanner, scan_start_time, dry_run=False)
+    run_global_cleanup(client.fileScanner, scan_start_time, dry_run=True)
     # 🔹 BUILD TRENDS (AFTER EVERYTHING)
     scan_end_time = datetime.now(timezone.utc)
     build_trend_daily_summary(client.fileScanner, scan_start_time, scan_end_time)
