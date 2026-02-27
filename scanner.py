@@ -273,7 +273,7 @@ def run_global_cleanup(db, scan_start_time, dry_run=True):
     if dry_run:
         print("DRY RUN counts:")
         print(" FileMetaLatest   :", len(file_ids))
-        print(" FileMetaAccess   :", db.FileMetaAccess.count_documents({"fileId": {"$in": file_ids}}))
+        # print(" FileMetaAccess   :", db.FileMetaAccess.count_documents({"fileId": {"$in": file_ids}}))
         print(" DuplicateFiles   :", db.DuplicateFiles.count_documents({"files.fullPath": {"$in": paths}}))
         return len(file_ids)
 
